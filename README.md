@@ -214,7 +214,9 @@ ORCHESTRA_REVIEWER_AGENT="reviewer"
 
 ## 🖼️ Sobre o logo do OpenCode
 
-A logo do OpenCode aparece na **tela inicial (home)**, que é mostrada quando a sessão está **vazia**. O `orchestra up` cria **sessões frescas** a cada subida, então você vê o logo até despachar a primeira tarefa — depois a TUI entra na visão de conversa (comportamento padrão do OpenCode).
+Os painéis CODER/REVISOR abrem **direto na visão de sessão** do OpenCode (via `opencode attach --session`), e não na tela "home" — por isso o **logo/splash grande não aparece**. Isso é **esperado**, não é bug: o `--session` é justamente o que permite o líder mirar a sessão pela API e você ver o trabalho **ao vivo** na própria TUI. O logo do OpenCode só é exibido na home (ao abrir **sem** sessão), o que é incompatível com esse modelo de orquestração. Mesmo assim os painéis ficam claramente identificados como OpenCode (modelo, sidebar e o rodapé `OpenCode x.y.z`).
+
+> O `orchestra up` cria **sessões frescas** a cada subida — não pelo logo, mas para começar com um **contexto limpo**.
 
 ---
 

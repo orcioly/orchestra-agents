@@ -88,7 +88,7 @@ except Exception:
 }
 
 # garante a sessão de um papel. 4º arg 'fresh' força sessão NOVA e vazia
-# (sessão vazia faz a TUI do OpenCode abrir na home com o LOGO).
+# (usado pelo 'up' para começar cada subida com contexto limpo).
 ensure_session() { # $1 role  $2 agent  $3 title  [fresh]
   local role="$1" agent="$2" title="$3" fresh="${4:-}"
   local f="$ORCHESTRA_STATE/$role.session" sid=""

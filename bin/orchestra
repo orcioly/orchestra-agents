@@ -46,7 +46,7 @@ case "$cmd" in
     echo "$proj" >"$ORCHESTRA_STATE/project"
     echo "🎼 subindo Orchestra no projeto: $proj"
     ensure_server || { echo "❌ servidor OpenCode não subiu — veja $ORCHESTRA_STATE/server.log"; exit 1; }
-    # sessões FRESCAS e vazias → a TUI do OpenCode abre na home com o LOGO
+    # sessões FRESCAS a cada 'up' → começa com contexto limpo
     ensure_session coder    "$ORCHESTRA_CODER_AGENT"    "CODER (executor)"    fresh >/dev/null
     ensure_session reviewer "$ORCHESTRA_REVIEWER_AGENT" "REVISOR (code review)" fresh >/dev/null
     exec zellij --layout "$ORCHESTRA_HOME/layouts/team.kdl"
