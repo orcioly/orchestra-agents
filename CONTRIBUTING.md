@@ -42,7 +42,7 @@ Ele valida sintaxe (`bash -n`), o `orchestra doctor` e um despacho async real. O
 
 ## 📝 Mensagens de commit
 
-Seguimos o padrão de **[iuricode/padroes-de-commits](https://github.com/iuricode/padroes-de-commits)**, com as mensagens **em inglês**: `<emoji> <tipo>: <descrição no imperativo>`.
+As mensagens são **em inglês** e adotam, **como referência de convenção**, o guia **[Padrões de Commits (iuricode)](https://github.com/iuricode/padroes-de-commits)**: `<emoji> <tipo>: <descrição no imperativo>`. (É só uma referência externa de padronização — não há vínculo com o projeto.)
 
 Exemplos:
 

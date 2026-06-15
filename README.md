@@ -271,29 +271,28 @@ SKIP_DISPATCH=1 ./tests/smoke.sh # só sintaxe + doctor (sem chamar modelo)
 
 ## 🚢 Processo de release
 
-Para publicar uma nova versão (ex.: `v0.2.0`):
+**Forma automática (recomendada).** O script [`scripts/release.sh`](scripts/release.sh) **calcula o próximo número** (semver), atualiza o `VERSION` em `bin/orchestra`, faz o commit, cria a tag, dá push e publica a release com **notas geradas automaticamente**:
 
-1. **Atualize a versão** na constante `VERSION` em [`bin/orchestra`](bin/orchestra):
-   ```sh
-   VERSION="0.2.0"
-   ```
-2. **Commit:**
-   ```bash
-   git commit -am "🔖 chore: bump version to v0.2.0"
-   ```
-3. **Crie e envie a tag** (semver com prefixo `v`):
-   ```bash
-   git tag -a v0.2.0 -m "Orchestra Agents v0.2.0"
-   git push origin main --follow-tags
-   ```
-4. **Crie a release no GitHub** — via CLI:
-   ```bash
-   gh release create v0.2.0 --verify-tag --title "v0.2.0" --notes "..."
-   ```
-   …ou pela web: **Releases → Draft a new release → escolha a tag `v0.2.0` → Publish**.
-5. **Pronto.** O badge de versão (`github/v/release`) e o link "latest" atualizam sozinhos.
+```bash
+./scripts/release.sh patch   # 0.1.0 -> 0.1.1
+./scripts/release.sh minor   # 0.1.0 -> 0.2.0
+./scripts/release.sh major   # 0.1.0 -> 1.0.0
+./scripts/release.sh 1.2.3   # versão explícita
+DRY_RUN=1 ./scripts/release.sh minor   # só mostra o que faria
+```
 
-> Mantenha a constante `VERSION` em `bin/orchestra` sempre em sincronia com a tag/release.
+> Você não precisa digitar o número — o script incrementa sozinho a partir do `VERSION` atual. A publicação da release precisa do `gh` autenticado como dono do repo; sem isso, ele cria a tag e mostra o comando para finalizar.
+
+<details>
+<summary>Passo a passo manual (equivalente)</summary>
+
+1. Atualize `VERSION="X.Y.Z"` em `bin/orchestra`.
+2. `git commit -am "🔖 chore: bump version to vX.Y.Z"`
+3. `git tag -a vX.Y.Z -m "Orchestra Agents vX.Y.Z" && git push origin main --follow-tags`
+4. `gh release create vX.Y.Z --verify-tag --title "vX.Y.Z" --generate-notes` (ou pela web: Releases → Draft a new release → escolha a tag → Publish)
+
+O badge de versão (`github/v/release`) e o link "latest" atualizam sozinhos.
+</details>
 
 ---
 
@@ -303,6 +302,14 @@ Para publicar uma nova versão (ex.: `v0.2.0`):
 - **Servidor não sobe** → veja `~/.local/state/orchestra-agents/server.log`; confirme que o OpenCode está autenticado (`opencode auth`).
 - **Worker não executa a tarefa** → confirme que `ORCHESTRA_MODEL` é um modelo válido/autenticado e que o agente (`build`/`reviewer`) existe no OpenCode.
 - **Sem logo** → é esperado depois que a sessão tem mensagens; suba de novo com `orchestra up` para sessões frescas.
+
+---
+
+## 🤝 Contribuindo
+
+Contribuições são bem-vindas! Veja o **[CONTRIBUTING.md](CONTRIBUTING.md)** para setup, testes e o fluxo de PR.
+
+As mensagens de commit são em inglês e adotam, **como referência de convenção**, o guia **[Padrões de Commits (iuricode)](https://github.com/iuricode/padroes-de-commits)** (emoji + tipo).
 
 ---
 
