@@ -11,14 +11,13 @@ Um **orquestrador de IA** para o terminal: o **Claude Code** atua como **líder 
 O líder despacha tarefas de forma **assíncrona** (não bloqueia, não fica gastando token esperando) e os workers trabalham em paralelo, com tudo visível ao vivo.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  LÍDER (Claude Code)  —  você orquestra daqui             │
-│  orchestra send coder "..."   orchestra send reviewer "..."│
-├───────────────────────────┬──────────────────────────────┤
-│  CODER (OpenCode TUI)      │  REVISOR (OpenCode TUI)       │
-│  agente: build            │  agente: reviewer (read-only) │
-└───────────────────────────┴──────────────────────────────┘
-        zellij  +  servidor OpenCode compartilhado (:4096)
+┌─────────────────────────────────────────────────────────────┐
+│             LÍDER (Claude Code) — você orquestra            │
+├──────────────────────────────┬──────────────────────────────┤
+│  CODER (OpenCode TUI)        │  REVISOR (OpenCode TUI)      │
+│  agente: build               │  agente: reviewer (read-only)│
+└──────────────────────────────┴──────────────────────────────┘
+        zellij + servidor OpenCode compartilhado (:4096)
 ```
 
 ---
@@ -97,9 +96,9 @@ Se quiser comandar na unha:
 ```bash
 orchestra send coder    "crie um endpoint POST /users com validação"
 orchestra send reviewer "revise as últimas mudanças e aponte bugs"
-orchestra result coder        # vê a resposta quando quiser (sob demanda)
-orchestra status              # estado do servidor/sessões
-orchestra down                # encerra o servidor
+orchestra result coder  # vê a resposta quando quiser (sob demanda)
+orchestra status        # estado do servidor/sessões
+orchestra down          # encerra o servidor
 ```
 
 ### Comandos
