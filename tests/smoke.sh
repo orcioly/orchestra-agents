@@ -27,7 +27,7 @@ printf '\n🔬 Orchestra Agents — smoke test\n\n'
 echo "1) Sintaxe dos scripts"
 syn_ok=1
 for f in "$ROOT/bin/orchestra" "$ROOT/lib/core.sh" "$ROOT"/agents/*.sh \
-         "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/tests/smoke.sh"; do
+         "$ROOT"/scripts/*.sh "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/tests/smoke.sh"; do
   bash -n "$f" 2>/dev/null || { no "sintaxe inválida: $f"; syn_ok=0; }
 done
 [ "$syn_ok" = 1 ] && ok "todos os scripts passaram no bash -n"

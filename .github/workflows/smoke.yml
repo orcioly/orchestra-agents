@@ -21,4 +21,4 @@ jobs:
         continue-on-error: true
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning bin/orchestra lib/core.sh agents/*.sh install.sh uninstall.sh tests/smoke.sh
+          shellcheck -S warning bin/orchestra lib/core.sh agents/*.sh scripts/*.sh install.sh uninstall.sh tests/smoke.sh
