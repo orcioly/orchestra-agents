@@ -248,6 +248,19 @@ orchestra-agents/
 
 ---
 
+## 🧪 Testes
+
+Um smoke test valida sintaxe dos scripts, `orchestra doctor` e um despacho async real:
+
+```bash
+./tests/smoke.sh                 # completo (precisa de OpenCode autenticado)
+SKIP_DISPATCH=1 ./tests/smoke.sh # só sintaxe + doctor (sem chamar modelo)
+```
+
+É isolado: usa estado próprio e roda num projeto temporário em `/tmp`, **sem** encerrar um Orchestra que já esteja rodando. Sai com código `0` (ok) ou `1` (falha) — pronto para CI.
+
+---
+
 ## 🩺 Troubleshooting
 
 - **`orchestra: command not found`** → adicione `~/.local/bin` ao `PATH`.
