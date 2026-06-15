@@ -269,6 +269,34 @@ SKIP_DISPATCH=1 ./tests/smoke.sh # só sintaxe + doctor (sem chamar modelo)
 
 ---
 
+## 🚢 Processo de release
+
+Para publicar uma nova versão (ex.: `v0.2.0`):
+
+1. **Atualize a versão** na constante `VERSION` em [`bin/orchestra`](bin/orchestra):
+   ```sh
+   VERSION="0.2.0"
+   ```
+2. **Commit:**
+   ```bash
+   git commit -am "🔖 chore: bump version to v0.2.0"
+   ```
+3. **Crie e envie a tag** (semver com prefixo `v`):
+   ```bash
+   git tag -a v0.2.0 -m "Orchestra Agents v0.2.0"
+   git push origin main --follow-tags
+   ```
+4. **Crie a release no GitHub** — via CLI:
+   ```bash
+   gh release create v0.2.0 --verify-tag --title "v0.2.0" --notes "..."
+   ```
+   …ou pela web: **Releases → Draft a new release → escolha a tag `v0.2.0` → Publish**.
+5. **Pronto.** O badge de versão (`github/v/release`) e o link "latest" atualizam sozinhos.
+
+> Mantenha a constante `VERSION` em `bin/orchestra` sempre em sincronia com a tag/release.
+
+---
+
 ## 🩺 Troubleshooting
 
 - **`orchestra: command not found`** → adicione `~/.local/bin` ao `PATH`.
