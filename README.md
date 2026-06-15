@@ -1,5 +1,7 @@
 # 🎼 Orchestra Agents
 
+[![smoke](https://github.com/orcioly/orchestra-agents/actions/workflows/smoke.yml/badge.svg)](https://github.com/orcioly/orchestra-agents/actions/workflows/smoke.yml)
+
 Um **orquestrador de IA** para o terminal: o **Claude Code** atua como **líder (maestro)** e coordena dois **workers do OpenCode** — um **CODER** (executor) e um **REVISOR** (code review) — cada um rodando na **TUI real do OpenCode**, lado a lado, dentro do **zellij**.
 
 O líder despacha tarefas de forma **assíncrona** (não bloqueia, não fica gastando token esperando) e os workers trabalham em paralelo, com tudo visível ao vivo.
@@ -257,7 +259,9 @@ Um smoke test valida sintaxe dos scripts, `orchestra doctor` e um despacho async
 SKIP_DISPATCH=1 ./tests/smoke.sh # só sintaxe + doctor (sem chamar modelo)
 ```
 
-É isolado: usa estado próprio e roda num projeto temporário em `/tmp`, **sem** encerrar um Orchestra que já esteja rodando. Sai com código `0` (ok) ou `1` (falha) — pronto para CI.
+É isolado: usa estado próprio e roda num projeto temporário em `/tmp`, **sem** encerrar um Orchestra que já esteja rodando. Sai com código `0` (ok) ou `1` (falha).
+
+**CI (GitHub Actions):** o workflow [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) roda o smoke test a cada push/PR na `main`. Como o runner não tem `claude`/`opencode`/`zellij`, os passos de `doctor` e despacho são **pulados automaticamente** — o CI valida a **sintaxe** de todos os scripts (e roda `shellcheck` de forma informativa).
 
 ---
 
