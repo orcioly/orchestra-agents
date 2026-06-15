@@ -8,3 +8,7 @@ state/
 # lixo comum
 *.log
 .DS_Store
+
+# contexto local do Claude (não versionar)
+CLAUDE.md
+CLAUDE.local.md
