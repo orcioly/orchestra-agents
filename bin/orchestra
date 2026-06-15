@@ -19,6 +19,7 @@ uso:
   orchestra result <papel>     mostra a última resposta do worker (sob demanda)
   orchestra status             estado do servidor e das sessões
   orchestra down               encerra o servidor OpenCode
+  orchestra uninstall          remove o Orchestra Agents por completo
   orchestra version            versão
 
 exemplos:
@@ -29,12 +30,18 @@ exemplos:
 EOF
 }
 
-cmd="${1:-}"; [ $# -gt 0 ] && shift
+# sem argumento, 'orchestra' já entra (= up no diretório atual)
+cmd="${1:-up}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   up)
     proj="${1:-$PWD}"
     proj="$(cd "$proj" 2>/dev/null && pwd)" || { echo "diretório inválido: ${1:-$PWD}"; exit 1; }
     command -v zellij >/dev/null 2>&1 || { echo "❌ zellij não encontrado no PATH"; exit 1; }
+    if [ -n "${ZELLIJ:-}" ]; then
+      echo "⚠️  você já está dentro de uma sessão zellij."
+      echo "    Saia para um terminal normal e rode 'orchestra' de novo (evita aninhar)."
+      exit 1
+    fi
     echo "$proj" >"$ORCHESTRA_STATE/project"
     echo "🎼 subindo Orchestra no projeto: $proj"
     ensure_server || { echo "❌ servidor OpenCode não subiu — veja $ORCHESTRA_STATE/server.log"; exit 1; }
@@ -47,6 +54,12 @@ case "$cmd" in
   result)   result "${1:-}" ;;
   status)   status ;;
   down)     teardown ;;
+  uninstall)
+    if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then uninstall; exit 0; fi
+    printf "Isso remove o Orchestra Agents POR COMPLETO. Confirmar? [y/N] "
+    read -r ans </dev/tty || ans=n
+    case "$ans" in y|Y|s|S) uninstall ;; *) echo "cancelado" ;; esac
+    ;;
   version|-v|--version) echo "orchestra-agents $VERSION" ;;
   ""|help|-h|--help)    usage ;;
   *) echo "comando desconhecido: '$cmd'"; echo; usage; exit 1 ;;

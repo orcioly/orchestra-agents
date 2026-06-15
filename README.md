@@ -50,50 +50,63 @@ O OpenCode precisa de um agente **`reviewer`** (read-only). Veja [`config/openco
 curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
 ```
 
-O instalador:
+É só isso — **nenhuma configuração manual**. O instalador:
 1. confere Claude Code + OpenCode;
 2. instala o **zellij** se faltar;
 3. coloca os arquivos em `~/.orchestra-agents`;
-4. cria o comando **`orchestra`** em `~/.local/bin`;
-5. avisa se o agente `reviewer` não estiver na config do OpenCode.
+4. instala o comando **`orchestra`** num diretório que **já está no seu `PATH`** (o mesmo do `claude`/`opencode`), então ele funciona na mesma sessão;
+5. configura o `PATH` automaticamente (zsh/bash/fish) caso necessário;
+6. avisa se o agente `reviewer` não estiver na config do OpenCode.
 
-Garanta que `~/.local/bin` está no seu `PATH` (o instalador avisa se não estiver).
+Depois de instalar, basta digitar `orchestra`.
 
 ---
 
 ## 🎬 Uso
 
+São só **dois passos** no dia a dia:
+
 ```bash
-# 1) entre no projeto que o time vai trabalhar
-cd ~/meu-projeto
+cd ~/meu-projeto   # qualquer projeto, qualquer pasta
+orchestra          # abre o zellij: LÍDER (Claude) em cima, CODER | REVISOR embaixo
+```
 
-# 2) suba o time (abre o zellij: LÍDER em cima, CODER | REVISOR embaixo)
-orchestra up
+> `orchestra` sozinho já entra (equivale a `orchestra up` no diretório atual).
 
-# 3) no painel do LÍDER (Claude), despache tarefas (assíncrono):
+### Modo natural (recomendado)
+
+Depois do `orchestra up`, **apenas converse com o Claude** no painel do LÍDER — ele já sobe sabendo orquestrar e delega sozinho:
+
+```
+você ▸ cria um endpoint POST /users com validação e depois manda revisar
+Claude (LÍDER) ▸ delega ao CODER... (roda no painel ao lado) e depois ao REVISOR
+```
+
+Você não precisa decorar comando nenhum. O líder despacha de forma assíncrona e busca os resultados pra você.
+
+### Modo manual (controle fino)
+
+Se quiser comandar na unha:
+
+```bash
 orchestra send coder    "crie um endpoint POST /users com validação"
 orchestra send reviewer "revise as últimas mudanças e aponte bugs"
-
-# veja resultados quando quiser (sob demanda):
-orchestra result coder
-orchestra result reviewer
-
-# estado do servidor/sessões:
-orchestra status
-
-# encerrar o servidor:
-orchestra down
+orchestra result coder        # vê a resposta quando quiser (sob demanda)
+orchestra status              # estado do servidor/sessões
+orchestra down                # encerra o servidor
 ```
 
 ### Comandos
 
 | Comando | Descrição |
 |---------|-----------|
+| `orchestra` | Atalho para `orchestra up` no diretório atual |
 | `orchestra up [dir]` | Sobe o time no zellij no projeto `dir` (padrão: diretório atual) |
 | `orchestra send <papel> "<tarefa>"` | Despacha tarefa **assíncrona** (`papel` = `coder` \| `reviewer`) |
 | `orchestra result <papel>` | Mostra a última resposta do worker |
 | `orchestra status` | Estado do servidor e das sessões |
 | `orchestra down` | Encerra o servidor OpenCode |
+| `orchestra uninstall` | Remove o Orchestra Agents por completo |
 | `orchestra version` | Versão |
 
 ---
@@ -127,15 +140,31 @@ A logo do OpenCode aparece na **tela inicial (home)**, que é mostrada quando a 
 
 ---
 
+## 🗑️ Desinstalação
+
+Remove tudo (CLI, PATH configurado, layout, estado, config e o diretório de instalação):
+
+```bash
+orchestra uninstall
+# ou, se preferir via curl:
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
+```
+
+> zellij, Claude Code e OpenCode **não** são removidos — são ferramentas gerais que você pode usar fora do Orchestra.
+
+---
+
 ## 🧩 Estrutura
 
 ```
 orchestra-agents/
 ├── install.sh                   # instalador (curl | bash)
+├── uninstall.sh                 # desinstalador
 ├── bin/orchestra                # CLI
-├── lib/core.sh                  # núcleo: servidor, sessões, despacho async
+├── lib/core.sh                  # núcleo: servidor, sessões, despacho async, uninstall
 ├── agents/
 │   ├── leader.sh                # painel do LÍDER (Claude)
+│   ├── leader-prompt.md         # instruções de orquestração (modo natural)
 │   ├── attach-coder.sh          # painel CODER (OpenCode TUI)
 │   └── attach-reviewer.sh       # painel REVISOR (OpenCode TUI)
 ├── layouts/

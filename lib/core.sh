@@ -142,3 +142,35 @@ teardown() {
   if pkill -f "opencode serve --port $ORCHESTRA_PORT" 2>/dev/null; then echo "🛑 servidor encerrado"
   else echo "servidor já estava parado"; fi
 }
+
+# remove COMPLETAMENTE o Orchestra Agents (preserva zellij/claude/opencode)
+uninstall() {
+  echo "🧹 Desinstalando Orchestra Agents..."
+  teardown >/dev/null 2>&1 || true
+  # 1) symlink(s) do CLI no PATH (+ o local registrado na instalação)
+  local d tgt bindir rc tmp IFSorig
+  bindir="$(cat "$ORCHESTRA_STATE/bindir" 2>/dev/null || true)"
+  [ -n "$bindir" ] && [ -L "$bindir/orchestra" ] && rm -f "$bindir/orchestra" && echo "  removido $bindir/orchestra"
+  IFSorig="$IFS"; IFS=:
+  for d in $PATH; do
+    if [ -L "$d/orchestra" ]; then
+      tgt="$(readlink "$d/orchestra" 2>/dev/null || true)"
+      case "$tgt" in *orchestra-agents/bin/orchestra) rm -f "$d/orchestra" && echo "  removido $d/orchestra";; esac
+    fi
+  done
+  IFS="$IFSorig"
+  # 2) linhas de PATH nos rc + fish
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+    { [ -f "$rc" ] && grep -q 'orchestra-agents (PATH)' "$rc" 2>/dev/null; } || continue
+    tmp="$(mktemp)"
+    awk '/# orchestra-agents \(PATH\)/{skip=2} skip>0{skip--; next} {print}' "$rc" >"$tmp" \
+      && mv "$tmp" "$rc" && echo "  PATH removido de $rc"
+  done
+  rm -f "$HOME/.config/fish/conf.d/orchestra.fish"
+  # 3) layout do zellij
+  rm -f "$HOME/.config/zellij/layouts/orchestra.kdl"
+  # 4) diretórios de config, estado e instalação
+  rm -rf "$HOME/.config/orchestra-agents" "$ORCHESTRA_STATE" "$ORCHESTRA_HOME"
+  echo "✅ Orchestra Agents removido por completo."
+  echo "   (zellij, Claude Code e OpenCode foram preservados — são ferramentas gerais.)"
+}

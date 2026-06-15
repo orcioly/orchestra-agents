@@ -16,8 +16,14 @@ cat <<EOF
       orchestra send coder    "implemente X"
       orchestra send reviewer "revise as mudanças"
 
-  Resultado sob demanda:   orchestra result coder
-  Estado do time:          orchestra status
+  Modo natural: só converse comigo (o Claude) que eu delego pros workers.
+  Manual:       orchestra send coder|reviewer "..."  ·  orchestra result  ·  status
 
 EOF
-exec claude
+# Sobe o Claude já instruído a orquestrar (modo natural).
+PROMPT_FILE="$ORCHESTRA_HOME/agents/leader-prompt.md"
+if [ -f "$PROMPT_FILE" ]; then
+  exec claude --append-system-prompt "$(cat "$PROMPT_FILE")"
+else
+  exec claude
+fi

@@ -13,13 +13,40 @@ REPO_NAME="${ORCHESTRA_REPO_NAME:-orchestra-agents}"
 REPO_BRANCH="${ORCHESTRA_REPO_BRANCH:-main}"
 REPO_URL="${ORCHESTRA_REPO_URL:-https://github.com/${REPO_USER}/${REPO_NAME}.git}"
 INSTALL_DIR="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
-BIN_DIR="${ORCHESTRA_BIN:-$HOME/.local/bin}"
+STATE_DIR="${ORCHESTRA_STATE:-$HOME/.local/state/orchestra-agents}"
+BIN_DIR="${ORCHESTRA_BIN:-}"   # resolvido automaticamente após checar pré-requisitos
 
 c_say(){ printf '\033[1;36m▶ %s\033[0m\n' "$*"; }
 c_ok(){  printf '\033[1;32m✔ %s\033[0m\n' "$*"; }
 c_warn(){ printf '\033[1;33m! %s\033[0m\n' "$*"; }
 c_err(){ printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; }
 have(){ command -v "$1" >/dev/null 2>&1; }
+in_path(){ case ":$PATH:" in *":$1:"*) return 0;; *) return 1;; esac; }
+
+# Escolhe um diretório de instalação do CLI que JÁ esteja no PATH e seja gravável,
+# para que 'orchestra' funcione na mesma sessão, sem configuração manual.
+# (o instalador roda via 'curl | bash' herdando o PATH real do usuário)
+pick_bindir() {
+  local d c p dd
+  # 1) preferidos, se já no PATH e graváveis
+  for d in "$HOME/.local/bin" "$HOME/bin"; do
+    [ -d "$d" ] && [ -w "$d" ] && in_path "$d" && { echo "$d"; return; }
+  done
+  # 2) diretório de um pré-requisito (garantidamente no PATH) e gravável
+  for c in opencode claude zellij; do
+    p="$(command -v "$c" 2>/dev/null)" || continue
+    dd="$(cd "$(dirname "$p")" 2>/dev/null && pwd)" || continue
+    in_path "$dd" && [ -w "$dd" ] && { echo "$dd"; return; }
+  done
+  # 3) qualquer diretório do PATH gravável dentro do HOME
+  local IFSorig="$IFS"; IFS=:
+  for d in $PATH; do
+    case "$d" in "$HOME"/*) if [ -w "$d" ]; then echo "$d"; IFS="$IFSorig"; return; fi;; esac
+  done
+  IFS="$IFSorig"
+  # 4) fallback: ~/.local/bin (será adicionado ao PATH via rc)
+  echo "$HOME/.local/bin"
+}
 
 printf '\n\033[1;35m🎼 Orchestra Agents — instalador\033[0m\n\n'
 
@@ -37,6 +64,10 @@ if ! have opencode && [ ! -x "$HOME/.opencode/bin/opencode" ]; then
 fi
 [ "$miss" = 1 ] && { c_err "Resolva os itens acima e rode novamente."; exit 1; }
 c_ok "Claude Code e OpenCode presentes."
+
+# resolve onde instalar o CLI (diretório já no PATH, sempre que possível)
+[ -n "$BIN_DIR" ] || BIN_DIR="$(pick_bindir)"
+mkdir -p "$BIN_DIR"
 
 # 2) zellij (instala por padrão se faltar)
 install_zellij(){
@@ -74,16 +105,37 @@ fi
 chmod +x "$INSTALL_DIR/bin/orchestra" "$INSTALL_DIR/agents/"*.sh 2>/dev/null || true
 c_ok "Arquivos instalados."
 
-# 4) symlink do CLI
-mkdir -p "$BIN_DIR"
+# 4) symlink do CLI + registra o local (para o uninstall saber)
 ln -sf "$INSTALL_DIR/bin/orchestra" "$BIN_DIR/orchestra"
-c_ok "CLI disponível: $BIN_DIR/orchestra"
+mkdir -p "$STATE_DIR"; printf '%s' "$BIN_DIR" >"$STATE_DIR/bindir"
+c_ok "CLI instalado: $BIN_DIR/orchestra"
 
-# 5) PATH
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) c_warn "Adicione ao seu ~/.zshrc (ou ~/.bashrc):  export PATH=\"$BIN_DIR:\$PATH\"";;
-esac
+# 5) PATH — só precisa configurar algo se o diretório escolhido NÃO estiver no PATH
+READY_NOW=1
+if in_path "$BIN_DIR"; then
+  c_ok "'orchestra' já disponível nesta sessão (sem configuração manual)."
+else
+  READY_NOW=0
+  c_say "Configurando o PATH automaticamente (zsh/bash/fish)..."
+  shname="$(basename "${SHELL:-}" 2>/dev/null)"
+  rcs=()
+  [ "$shname" = zsh ]  && rcs+=("$HOME/.zshrc")
+  [ "$shname" = bash ] && rcs+=("$HOME/.bashrc")
+  [ -f "$HOME/.zshrc" ]  && rcs+=("$HOME/.zshrc")
+  [ -f "$HOME/.bashrc" ] && rcs+=("$HOME/.bashrc")
+  [ ${#rcs[@]} -eq 0 ] && rcs+=("$HOME/.profile")
+  for rc in $(printf '%s\n' "${rcs[@]}" | sort -u); do
+    if ! grep -qs 'orchestra-agents (PATH)' "$rc" 2>/dev/null; then
+      printf '\n# orchestra-agents (PATH)\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >>"$rc"
+      c_ok "PATH adicionado em $rc"
+    fi
+  done
+  if command -v fish >/dev/null 2>&1 || [ -d "$HOME/.config/fish" ]; then
+    mkdir -p "$HOME/.config/fish/conf.d"
+    printf 'fish_add_path %s\n' "$BIN_DIR" >"$HOME/.config/fish/conf.d/orchestra.fish"
+    c_ok "PATH (fish) configurado."
+  fi
+fi
 
 # 6) layout extra no diretório padrão do zellij (conveniência)
 mkdir -p "$HOME/.config/zellij/layouts"
@@ -101,14 +153,30 @@ fi
 
 printf '\n'
 c_ok "Instalação concluída! 🎼"
-cat <<EOF
+if [ "$READY_NOW" = 1 ]; then
+  cat <<EOF
 
-  Para começar:
-    1) Entre no seu projeto:        cd ~/meu-projeto
-    2) Suba o time:                 orchestra up
-    3) No painel do LÍDER (Claude): orchestra send coder "implemente X"
-                                    orchestra send reviewer "revise as mudanças"
-    Status / resultado:             orchestra status   |   orchestra result coder
+  Pronto! É só ir ao seu projeto e digitar:
 
-  Docs:  $INSTALL_DIR/README.md
+      cd ~/meu-projeto
+      orchestra
+
+  Depois, no painel do LÍDER (Claude), apenas converse: ele delega ao
+  CODER (implementar) e ao REVISOR (revisar) automaticamente.
+
+  Desinstalar tudo:  orchestra uninstall
+  Docs:              $INSTALL_DIR/README.md
 EOF
+else
+  cat <<EOF
+
+  Quase lá! Abra um novo terminal (o PATH foi configurado automaticamente),
+  então vá ao seu projeto e digite:
+
+      cd ~/meu-projeto
+      orchestra
+
+  Desinstalar tudo:  orchestra uninstall
+  Docs:              $INSTALL_DIR/README.md
+EOF
+fi
