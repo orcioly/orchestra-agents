@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Orchestra Agents — CLI do orquestrador
+set -uo pipefail
+ORCHESTRA_HOME="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
+# shellcheck source=/dev/null
+. "$ORCHESTRA_HOME/lib/core.sh"
+
+VERSION="0.1.0"
+
+usage() {
+  cat <<'EOF'
+🎼 Orchestra Agents — orquestrador de IA (Claude líder + workers OpenCode)
+
+uso:
+  orchestra up [dir]            sobe o time no zellij (LÍDER + CODER + REVISOR)
+                               no projeto 'dir' (padrão: diretório atual)
+  orchestra send <papel> <txt> despacha tarefa de forma ASSÍNCRONA (não bloqueia)
+                               papel: coder | reviewer
+  orchestra result <papel>     mostra a última resposta do worker (sob demanda)
+  orchestra status             estado do servidor e das sessões
+  orchestra down               encerra o servidor OpenCode
+  orchestra version            versão
+
+exemplos:
+  orchestra up ~/meu-projeto
+  orchestra send coder    "crie um endpoint POST /users com validação"
+  orchestra send reviewer "revise as últimas mudanças e aponte bugs"
+  orchestra result reviewer
+EOF
+}
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  up)
+    proj="${1:-$PWD}"
+    proj="$(cd "$proj" 2>/dev/null && pwd)" || { echo "diretório inválido: ${1:-$PWD}"; exit 1; }
+    command -v zellij >/dev/null 2>&1 || { echo "❌ zellij não encontrado no PATH"; exit 1; }
+    echo "$proj" >"$ORCHESTRA_STATE/project"
+    echo "🎼 subindo Orchestra no projeto: $proj"
+    ensure_server || { echo "❌ servidor OpenCode não subiu — veja $ORCHESTRA_STATE/server.log"; exit 1; }
+    # sessões FRESCAS e vazias → a TUI do OpenCode abre na home com o LOGO
+    ensure_session coder    "$ORCHESTRA_CODER_AGENT"    "CODER (executor)"    fresh >/dev/null
+    ensure_session reviewer "$ORCHESTRA_REVIEWER_AGENT" "REVISOR (code review)" fresh >/dev/null
+    exec zellij --layout "$ORCHESTRA_HOME/layouts/team.kdl"
+    ;;
+  send)     dispatch "$@" ;;
+  result)   result "${1:-}" ;;
+  status)   status ;;
+  down)     teardown ;;
+  version|-v|--version) echo "orchestra-agents $VERSION" ;;
+  ""|help|-h|--help)    usage ;;
+  *) echo "comando desconhecido: '$cmd'"; echo; usage; exit 1 ;;
+esac

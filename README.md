@@ -1,0 +1,160 @@
+# 🎼 Orchestra Agents
+
+Um **orquestrador de IA** para o terminal: o **Claude Code** atua como **líder (maestro)** e coordena dois **workers do OpenCode** — um **CODER** (executor) e um **REVISOR** (code review) — cada um rodando na **TUI real do OpenCode**, lado a lado, dentro do **zellij**.
+
+O líder despacha tarefas de forma **assíncrona** (não bloqueia, não fica gastando token esperando) e os workers trabalham em paralelo, com tudo visível ao vivo.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  LÍDER (Claude Code)  —  você orquestra daqui             │
+│  orchestra send coder "..."   orchestra send reviewer "..."│
+├───────────────────────────┬──────────────────────────────┤
+│  CODER (OpenCode TUI)      │  REVISOR (OpenCode TUI)       │
+│  agente: build            │  agente: reviewer (read-only) │
+└───────────────────────────┴──────────────────────────────┘
+        zellij  +  servidor OpenCode compartilhado (:4096)
+```
+
+---
+
+## ✨ Como funciona
+
+Orchestra usa a arquitetura **cliente/servidor** do OpenCode:
+
+- **`opencode serve`** sobe um servidor headless compartilhado (porta `4096`).
+- Cada worker é uma **TUI real** attachada a uma sessão: `opencode attach <url> --session <id>`.
+- O líder injeta tarefas via API **assíncrona** (`POST /session/:id/prompt_async`, HTTP 204 instantâneo) — o worker processa em background e renderiza ao vivo na própria TUI.
+- Resultados são lidos **sob demanda** (`orchestra result`), nunca em loop — por isso o líder não desperdiça tokens esperando.
+
+---
+
+## ✅ Pré-requisitos
+
+Você precisa ter, **já instalados e configurados**:
+
+| Requisito | Como obter |
+|-----------|-----------|
+| **Claude Code** | <https://docs.claude.com/claude-code> |
+| **OpenCode** (autenticado, com um modelo configurado) | <https://opencode.ai> |
+| `git`, `curl`, `python3` | já vêm na maioria das distros |
+
+> O **zellij** é instalado automaticamente pelo instalador se você ainda não tiver.
+
+O OpenCode precisa de um agente **`reviewer`** (read-only). Veja [`config/opencode.reviewer.jsonc`](config/opencode.reviewer.jsonc) — o instalador avisa se ele estiver faltando.
+
+---
+
+## 🚀 Instalação
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
+```
+
+O instalador:
+1. confere Claude Code + OpenCode;
+2. instala o **zellij** se faltar;
+3. coloca os arquivos em `~/.orchestra-agents`;
+4. cria o comando **`orchestra`** em `~/.local/bin`;
+5. avisa se o agente `reviewer` não estiver na config do OpenCode.
+
+Garanta que `~/.local/bin` está no seu `PATH` (o instalador avisa se não estiver).
+
+---
+
+## 🎬 Uso
+
+```bash
+# 1) entre no projeto que o time vai trabalhar
+cd ~/meu-projeto
+
+# 2) suba o time (abre o zellij: LÍDER em cima, CODER | REVISOR embaixo)
+orchestra up
+
+# 3) no painel do LÍDER (Claude), despache tarefas (assíncrono):
+orchestra send coder    "crie um endpoint POST /users com validação"
+orchestra send reviewer "revise as últimas mudanças e aponte bugs"
+
+# veja resultados quando quiser (sob demanda):
+orchestra result coder
+orchestra result reviewer
+
+# estado do servidor/sessões:
+orchestra status
+
+# encerrar o servidor:
+orchestra down
+```
+
+### Comandos
+
+| Comando | Descrição |
+|---------|-----------|
+| `orchestra up [dir]` | Sobe o time no zellij no projeto `dir` (padrão: diretório atual) |
+| `orchestra send <papel> "<tarefa>"` | Despacha tarefa **assíncrona** (`papel` = `coder` \| `reviewer`) |
+| `orchestra result <papel>` | Mostra a última resposta do worker |
+| `orchestra status` | Estado do servidor e das sessões |
+| `orchestra down` | Encerra o servidor OpenCode |
+| `orchestra version` | Versão |
+
+---
+
+## ⚙️ Configuração
+
+Variáveis de ambiente ou `~/.config/orchestra-agents/config` (formato shell):
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `ORCHESTRA_MODEL` | `deepseek/deepseek-v4-pro` | Modelo `provider/model` (precisa estar configurado no OpenCode) |
+| `ORCHESTRA_CODER_AGENT` | `build` | Agente do CODER |
+| `ORCHESTRA_REVIEWER_AGENT` | `reviewer` | Agente do REVISOR |
+| `ORCHESTRA_PORT` | `4096` | Porta do servidor OpenCode |
+| `ORCHESTRA_HOST` | `127.0.0.1` | Host do servidor |
+| `ORCHESTRA_HOME` | `~/.orchestra-agents` | Diretório de instalação |
+| `ORCHESTRA_STATE` | `~/.local/state/orchestra-agents` | Estado de runtime (ids de sessão, logs) |
+
+Exemplo `~/.config/orchestra-agents/config`:
+
+```sh
+ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"
+ORCHESTRA_REVIEWER_AGENT="reviewer"
+```
+
+---
+
+## 🖼️ Sobre o logo do OpenCode
+
+A logo do OpenCode aparece na **tela inicial (home)**, que é mostrada quando a sessão está **vazia**. O `orchestra up` cria **sessões frescas** a cada subida, então você vê o logo até despachar a primeira tarefa — depois a TUI entra na visão de conversa (comportamento padrão do OpenCode).
+
+---
+
+## 🧩 Estrutura
+
+```
+orchestra-agents/
+├── install.sh                   # instalador (curl | bash)
+├── bin/orchestra                # CLI
+├── lib/core.sh                  # núcleo: servidor, sessões, despacho async
+├── agents/
+│   ├── leader.sh                # painel do LÍDER (Claude)
+│   ├── attach-coder.sh          # painel CODER (OpenCode TUI)
+│   └── attach-reviewer.sh       # painel REVISOR (OpenCode TUI)
+├── layouts/
+│   ├── team.kdl                 # zellij: LÍDER + CODER + REVISOR
+│   └── solo.kdl                 # zellij: só o LÍDER
+└── config/opencode.reviewer.jsonc  # agente reviewer de referência
+```
+
+---
+
+## 🩺 Troubleshooting
+
+- **`orchestra: command not found`** → adicione `~/.local/bin` ao `PATH`.
+- **Servidor não sobe** → veja `~/.local/state/orchestra-agents/server.log`; confirme que o OpenCode está autenticado (`opencode auth`).
+- **Worker não executa a tarefa** → confirme que `ORCHESTRA_MODEL` é um modelo válido/autenticado e que o agente (`build`/`reviewer`) existe no OpenCode.
+- **Sem logo** → é esperado depois que a sessão tem mensagens; suba de novo com `orchestra up` para sessões frescas.
+
+---
+
+## 📄 Licença
+
+MIT © 2026 orcioly

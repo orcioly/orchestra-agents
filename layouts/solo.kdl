@@ -1,0 +1,12 @@
+// Orchestra Agents — layout SOLO (só o LÍDER/Claude, sem workers)
+layout {
+    pane size=1 borderless=true {
+        plugin location="zellij:tab-bar"
+    }
+    pane name="LÍDER (Claude)" command="bash" {
+        args "-lc" "exec ${ORCHESTRA_HOME:-$HOME/.orchestra-agents}/agents/leader.sh"
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:status-bar"
+    }
+}
