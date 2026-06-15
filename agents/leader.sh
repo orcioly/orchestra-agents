@@ -21,6 +21,7 @@ cat <<EOF
 
 EOF
 # Sobe o Claude já instruído a orquestrar (modo natural).
+# NÃO passamos --model: o Claude Code usa o modelo que VOCÊ já configurou.
 PROMPT_FILE="$ORCHESTRA_HOME/agents/leader-prompt.md"
 if [ -f "$PROMPT_FILE" ]; then
   exec claude --append-system-prompt "$(cat "$PROMPT_FILE")"

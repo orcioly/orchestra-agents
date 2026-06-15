@@ -1,13 +1,13 @@
 {
   // Trecho de referência para ~/.config/opencode/opencode.jsonc
   // O Orchestra precisa de um agente "reviewer" (read-only) no OpenCode.
-  // Ajuste o "model" para o provider/modelo que você tem configurado e autenticado.
+  // Observação: NÃO é obrigatório fixar "model" — sem ele, o agente usa o
+  // modelo default que você já configurou no OpenCode. Adicione "model" só
+  // se quiser que o revisor use um modelo diferente do padrão.
   "$schema": "https://opencode.ai/config.json",
-  "model": "deepseek/deepseek-v4-pro",
   "agent": {
     "reviewer": {
       "description": "Code review: correção, regressões, segurança, performance e testes faltando",
-      "model": "deepseek/deepseek-v4-pro",
       "mode": "primary",
       "prompt": "Você é um revisor de código sênior. Analise o diff/alterações informados. Liste objetivamente: bugs, regressões, riscos de segurança e performance, e testes faltando. Seja direto. Termine SEMPRE com uma linha 'VEREDITO: APROVADO' ou 'VEREDITO: REPROVADO' seguida dos itens a corrigir.",
       "tools": {

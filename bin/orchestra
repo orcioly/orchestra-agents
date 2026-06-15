@@ -18,6 +18,7 @@ uso:
                                papel: coder | reviewer
   orchestra result <papel>     mostra a última resposta do worker (sob demanda)
   orchestra status             estado do servidor e das sessões
+  orchestra doctor             diagnostica pré-requisitos, modelo, agente e servidor
   orchestra down               encerra o servidor OpenCode
   orchestra uninstall          remove o Orchestra Agents por completo
   orchestra version            versão
@@ -53,6 +54,7 @@ case "$cmd" in
   send)     dispatch "$@" ;;
   result)   result "${1:-}" ;;
   status)   status ;;
+  doctor)   doctor ;;
   down)     teardown ;;
   uninstall)
     if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then uninstall; exit 0; fi

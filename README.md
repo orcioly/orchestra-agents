@@ -111,13 +111,86 @@ orchestra down                # encerra o servidor
 
 ---
 
+## 🩺 Diagnóstico (`orchestra doctor`)
+
+Antes de subir o time — ou quando algo não funciona — rode:
+
+```bash
+orchestra doctor
+```
+
+Ele verifica, em três blocos, tudo que o Orchestra precisa:
+
+**Pré-requisitos** (binários no `PATH`):
+- `claude`, `opencode`, `zellij`, `git`, `python3`, `curl` — mostra o caminho de cada um ou aponta o que falta (com o link de instalação).
+
+**OpenCode** (relativo ao **modelo efetivo** — o forçado em `ORCHESTRA_MODEL`, ou o default da sua config do OpenCode):
+- **provider autenticado** — confere se o provider do modelo está em `~/.local/share/opencode/auth.json`; senão sugere `opencode auth login`.
+- **modelo disponível** — confere se o modelo efetivo aparece em `opencode models`.
+- **agente revisor** — confere se o agente `reviewer` existe em `~/.config/opencode/opencode.jsonc`.
+
+**Orchestra**:
+- instalação presente em `~/.orchestra-agents`;
+- comando `orchestra` acessível no `PATH`;
+- estado do **servidor** OpenCode (no ar ou parado — ele sobe sozinho no `orchestra`).
+
+### Exemplo de saída
+
+```text
+🩺 Orchestra Agents — diagnóstico
+
+Pré-requisitos:
+  ✔ claude — /home/voce/.local/bin/claude
+  ✔ opencode — /home/voce/.opencode/bin/opencode
+  ✔ zellij — /home/voce/.local/bin/zellij
+  ✔ git — /usr/bin/git
+  ✔ python3 — /usr/bin/python3
+  ✔ curl — /usr/bin/curl
+
+OpenCode (modelo: deepseek/deepseek-v4-pro — default do OpenCode):
+  ✔ provider 'deepseek' autenticado
+  ✔ modelo 'deepseek/deepseek-v4-pro' disponível
+  ✔ agente revisor 'reviewer' configurado
+
+Orchestra:
+  ✔ instalado em /home/voce/.orchestra-agents
+  ✔ CLI no PATH — /home/voce/.local/bin/orchestra
+  ! servidor parado (sobe ao rodar 'orchestra')
+
+Resumo: o essencial está ok, com 1 aviso(s).
+```
+
+### Legenda e código de saída
+
+| Símbolo | Significado |
+|---------|-------------|
+| ✔ | OK |
+| ! | aviso — funciona, mas vale ajustar (ex.: servidor parado, modelo diferente) |
+| ✖ | falha — algo essencial está faltando |
+
+- **Exit code `0`** quando não há falhas (mesmo com avisos).
+- **Exit code `1`** quando há ao menos uma falha ✖ — útil em scripts de CI/checagem.
+
+---
+
 ## ⚙️ Configuração
 
-Variáveis de ambiente ou `~/.config/orchestra-agents/config` (formato shell):
+### Modelos (importante)
+
+O Orchestra **usa os modelos que você já tem configurados** — não força nenhum:
+
+- **Workers (OpenCode):** por padrão **nenhum modelo é enviado**, então o OpenCode usa o **modelo default da sua config** (`~/.config/opencode/opencode.jsonc`) ou o do próprio agente. Quer forçar um modelo específico? Defina `ORCHESTRA_MODEL="provider/modelo"`.
+- **Líder (Claude Code):** sobe com `claude` **sem `--model`**, então usa o **modelo que você configurou no Claude Code**.
+
+Resumo: configurou no OpenCode/Claude → é o que o Orchestra usa.
+
+### Variáveis
+
+Por ambiente ou em `~/.config/orchestra-agents/config` (formato shell):
 
 | Variável | Padrão | Descrição |
 |----------|--------|-----------|
-| `ORCHESTRA_MODEL` | `deepseek/deepseek-v4-pro` | Modelo `provider/model` (precisa estar configurado no OpenCode) |
+| `ORCHESTRA_MODEL` | *(vazio)* | **Override opcional** do modelo dos workers (`provider/modelo`). Vazio = usa o default do OpenCode |
 | `ORCHESTRA_CODER_AGENT` | `build` | Agente do CODER |
 | `ORCHESTRA_REVIEWER_AGENT` | `reviewer` | Agente do REVISOR |
 | `ORCHESTRA_PORT` | `4096` | Porta do servidor OpenCode |
@@ -125,10 +198,10 @@ Variáveis de ambiente ou `~/.config/orchestra-agents/config` (formato shell):
 | `ORCHESTRA_HOME` | `~/.orchestra-agents` | Diretório de instalação |
 | `ORCHESTRA_STATE` | `~/.local/state/orchestra-agents` | Estado de runtime (ids de sessão, logs) |
 
-Exemplo `~/.config/orchestra-agents/config`:
+Exemplo `~/.config/orchestra-agents/config` (só se quiser forçar algo):
 
 ```sh
-ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"
+ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # opcional — força este modelo nos workers
 ORCHESTRA_REVIEWER_AGENT="reviewer"
 ```
 

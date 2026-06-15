@@ -5,7 +5,8 @@ export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
 # shellcheck source=/dev/null
 . "$ORCHESTRA_HOME/lib/core.sh"
 clear
-echo "🛠️  CODER — OpenCode TUI (agente $ORCHESTRA_CODER_AGENT · $ORCHESTRA_MODEL)"
+MDL="$(_effective_model 2>/dev/null)"; [ -n "$ORCHESTRA_MODEL" ] || MDL="${MDL:-default} (OpenCode)"
+echo "🛠️  CODER — OpenCode TUI (agente $ORCHESTRA_CODER_AGENT · modelo: $MDL)"
 echo "    conectando ao servidor do time..."
 ensure_server >/dev/null || { echo "❌ servidor OpenCode indisponível — veja $ORCHESTRA_STATE/server.log"; exec bash; }
 SID="$(ensure_session coder "$ORCHESTRA_CODER_AGENT" "CODER (executor)")"

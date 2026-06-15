@@ -7,8 +7,9 @@ ORCHESTRA_HOME="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
 ORCHESTRA_STATE="${ORCHESTRA_STATE:-$HOME/.local/state/orchestra-agents}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-4096}"
 ORCHESTRA_HOST="${ORCHESTRA_HOST:-127.0.0.1}"
-# modelo no formato provider/model (precisa estar configurado/autenticado no OpenCode)
-ORCHESTRA_MODEL="${ORCHESTRA_MODEL:-deepseek/deepseek-v4-pro}"
+# modelo: VAZIO por padrão => usa o modelo já configurado/default no OpenCode.
+# defina ORCHESTRA_MODEL="provider/modelo" só se quiser FORÇAR um modelo específico.
+ORCHESTRA_MODEL="${ORCHESTRA_MODEL:-}"
 ORCHESTRA_CODER_AGENT="${ORCHESTRA_CODER_AGENT:-build}"
 ORCHESTRA_REVIEWER_AGENT="${ORCHESTRA_REVIEWER_AGENT:-reviewer}"
 
@@ -20,6 +21,31 @@ mkdir -p "$ORCHESTRA_STATE"
 
 _model_provider() { echo "${ORCHESTRA_MODEL%%/*}"; }
 _model_id()       { echo "${ORCHESTRA_MODEL#*/}"; }
+
+# lê o modelo default já configurado no OpenCode (~/.config/opencode/opencode.jsonc)
+_detect_model() {
+  local cfg
+  for cfg in "$HOME/.config/opencode/opencode.jsonc" "$HOME/.config/opencode/opencode.json"; do
+    [ -f "$cfg" ] || continue
+    python3 - "$cfg" <<'PY'
+import sys, re, json
+src = open(sys.argv[1]).read()
+src = re.sub(r'/\*.*?\*/', '', src, flags=re.S)          # comentários de bloco
+src = re.sub(r'(?m)(^|\s)//.*$', '', src)                 # comentários de linha (preserva http://)
+try:
+    print(json.loads(src).get("model") or "")
+except Exception:
+    raise SystemExit(1)
+PY
+    return 0
+  done
+  return 1
+}
+
+# modelo efetivo para exibir/diagnosticar: o forçado, senão o default do OpenCode
+_effective_model() {
+  if [ -n "$ORCHESTRA_MODEL" ]; then echo "$ORCHESTRA_MODEL"; else _detect_model 2>/dev/null || true; fi
+}
 
 # localiza o binário do opencode
 _resolve_opencode() {
@@ -87,14 +113,14 @@ dispatch() { # $1 role  $2.. texto
   f="$ORCHESTRA_STATE/$role.session"
   [ -s "$f" ] || { echo "❌ sessão de '$role' não existe — rode 'orchestra up' primeiro"; return 1; }
   sid="$(cat "$f")"
-  python3 - "$OC_URL" "$sid" "$text" "$agent" "$(_model_provider)" "$(_model_id)" <<'PY'
+  python3 - "$OC_URL" "$sid" "$text" "$agent" "$ORCHESTRA_MODEL" <<'PY'
 import sys, json, urllib.request, urllib.error
-url, sid, text, agent, prov, model = sys.argv[1:7]
-body = json.dumps({
-    "agent": agent,
-    "model": {"providerID": prov, "modelID": model},
-    "parts": [{"type": "text", "text": text}],
-}).encode()
+url, sid, text, agent, model = sys.argv[1:6]
+payload = {"agent": agent, "parts": [{"type": "text", "text": text}]}
+if model:  # só força o modelo se ORCHESTRA_MODEL estiver definido; senão usa o default do OpenCode
+    prov, _, mid = model.partition("/")
+    payload["model"] = {"providerID": prov, "modelID": mid}
+body = json.dumps(payload).encode()
 req = urllib.request.Request(f"{url}/session/{sid}/prompt_async", data=body,
                             headers={"Content-Type": "application/json"}, method="POST")
 try:
@@ -127,7 +153,10 @@ print(txt or '(processando ou resposta sem texto)')"
 
 status() {
   if oc_up; then echo "🟢 servidor: no ar ($OC_URL)"; else echo "🔴 servidor: parado (rode 'orchestra up')"; return; fi
-  echo "   modelo: $ORCHESTRA_MODEL"
+  local em; em="$(_effective_model)"
+  if [ -n "$ORCHESTRA_MODEL" ]; then echo "   modelo: $em (forçado)"
+  elif [ -n "$em" ]; then echo "   modelo: $em (default do OpenCode)"
+  else echo "   modelo: default do OpenCode"; fi
   local proj; proj="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"
   [ -n "$proj" ] && echo "   projeto: $proj"
   local role f sid
@@ -141,6 +170,72 @@ status() {
 teardown() {
   if pkill -f "opencode serve --port $ORCHESTRA_PORT" 2>/dev/null; then echo "🛑 servidor encerrado"
   else echo "servidor já estava parado"; fi
+}
+
+# diagnóstico de pré-requisitos, modelo/agente do OpenCode, servidor e PATH
+doctor() {
+  local ok=0 warn=0 fail=0 b p
+  _dok(){   printf '  \033[1;32m✔\033[0m %s\n' "$*"; ok=$((ok+1)); }
+  _dwarn(){ printf '  \033[1;33m!\033[0m %s\n' "$*"; warn=$((warn+1)); }
+  _dfail(){ printf '  \033[1;31m✖\033[0m %s\n' "$*"; fail=$((fail+1)); }
+
+  printf '\n🩺 Orchestra Agents — diagnóstico\n\n'
+
+  echo "Pré-requisitos:"
+  for b in claude opencode zellij git python3 curl; do
+    if p="$(command -v "$b" 2>/dev/null)"; then _dok "$b — $p"
+    elif [ "$b" = opencode ] && [ -x "$HOME/.opencode/bin/opencode" ]; then _dok "opencode — $HOME/.opencode/bin/opencode"
+    else
+      case "$b" in
+        claude)   _dfail "claude ausente — https://docs.claude.com/claude-code" ;;
+        opencode) _dfail "opencode ausente — https://opencode.ai" ;;
+        zellij)   _dfail "zellij ausente — reinstale (install.sh) ou https://zellij.dev" ;;
+        *)        _dfail "$b ausente" ;;
+      esac
+    fi
+  done
+
+  local em provider auth_file oc_cfg origin
+  em="$(_effective_model)"
+  [ -n "$ORCHESTRA_MODEL" ] && origin="forçado (ORCHESTRA_MODEL)" || origin="default do OpenCode"
+  echo; echo "OpenCode (modelo: ${em:-?} — $origin):"
+  if [ -z "$em" ]; then
+    _dwarn "não consegui detectar o modelo default do OpenCode — confira ~/.config/opencode/opencode.jsonc"
+  else
+    provider="${em%%/*}"
+    auth_file="$HOME/.local/share/opencode/auth.json"
+    if [ -f "$auth_file" ] && python3 -c "import json,sys;d=json.load(open('$auth_file'));sys.exit(0 if '$provider' in d else 1)" 2>/dev/null; then
+      _dok "provider '$provider' autenticado"
+    else
+      _dwarn "provider '$provider' não autenticado — rode: opencode auth login"
+    fi
+    if "$OPENCODE" models 2>/dev/null | grep -qx "$em"; then
+      _dok "modelo '$em' disponível"
+    else
+      _dwarn "modelo '$em' não listado em 'opencode models'"
+    fi
+  fi
+  oc_cfg="$HOME/.config/opencode/opencode.jsonc"
+  if [ -f "$oc_cfg" ] && grep -q "\"$ORCHESTRA_REVIEWER_AGENT\"" "$oc_cfg"; then
+    _dok "agente revisor '$ORCHESTRA_REVIEWER_AGENT' configurado"
+  else
+    _dwarn "agente '$ORCHESTRA_REVIEWER_AGENT' não encontrado — veja $ORCHESTRA_HOME/config/opencode.reviewer.jsonc"
+  fi
+
+  echo; echo "Orchestra:"
+  [ -d "$ORCHESTRA_HOME" ] && _dok "instalado em $ORCHESTRA_HOME" || _dfail "instalação não encontrada em $ORCHESTRA_HOME"
+  local oself; oself="$(command -v orchestra 2>/dev/null || true)"
+  [ -n "$oself" ] && _dok "CLI no PATH — $oself" || _dwarn "comando 'orchestra' não está no PATH"
+  oc_up && _dok "servidor: no ar ($OC_URL)" || _dwarn "servidor parado (sobe ao rodar 'orchestra')"
+
+  echo
+  if [ "$fail" -gt 0 ]; then
+    printf '\033[1;31mResumo: %d falha(s) e %d aviso(s). Resolva as falhas acima.\033[0m\n' "$fail" "$warn"; return 1
+  elif [ "$warn" -gt 0 ]; then
+    printf '\033[1;33mResumo: o essencial está ok, com %d aviso(s).\033[0m\n' "$warn"; return 0
+  else
+    printf '\033[1;32mResumo: tudo certo! Pode rodar "orchestra". 🎼\033[0m\n'; return 0
+  fi
 }
 
 # remove COMPLETAMENTE o Orchestra Agents (preserva zellij/claude/opencode)
