@@ -1,7 +1,7 @@
 # 🎼 Orchestra Agents
 
 [![smoke](https://github.com/orcioly/orchestra-agents/actions/workflows/smoke.yml/badge.svg)](https://github.com/orcioly/orchestra-agents/actions/workflows/smoke.yml)
-[![version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/orcioly/orchestra-agents/releases)
+[![version](https://img.shields.io/github/v/tag/orcioly/orchestra-agents?sort=semver&label=version&color=blue)](https://github.com/orcioly/orchestra-agents/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/orcioly/orchestra-agents/pulls)
