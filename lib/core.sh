@@ -59,8 +59,16 @@ oc_up() { curl -s --max-time 2 "$OC_URL/api/session" >/dev/null 2>&1; }
 
 ensure_server() {
   oc_up && return 0
-  setsid "$OPENCODE" serve --port "$ORCHESTRA_PORT" --hostname "$ORCHESTRA_HOST" \
-    >"$ORCHESTRA_STATE/server.log" 2>&1 </dev/null &
+  # destaca o servidor de forma portátil: setsid no Linux (idiomático),
+  # nohup+disown no macOS/BSD, onde setsid não existe.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$OPENCODE" serve --port "$ORCHESTRA_PORT" --hostname "$ORCHESTRA_HOST" \
+      >"$ORCHESTRA_STATE/server.log" 2>&1 </dev/null &
+  else
+    nohup "$OPENCODE" serve --port "$ORCHESTRA_PORT" --hostname "$ORCHESTRA_HOST" \
+      >"$ORCHESTRA_STATE/server.log" 2>&1 </dev/null &
+    disown 2>/dev/null || true
+  fi
   for _ in $(seq 1 30); do oc_up && return 0; sleep 1; done
   return 1
 }
