@@ -209,13 +209,9 @@ while elapsed < timeout:
         resp = urllib.request.urlopen(f"{url}/session/{sid}/message", timeout=10)
         data = json.load(resp)
         messages = data if isinstance(data, list) else data.get('data', [])
-    except (urllib.error.URLError, TimeoutError, OSError):
-        # ALTA (a): retry apenas em erros transientes de rede
-        time.sleep(interval)
-        elapsed += interval
-        continue
     except urllib.error.HTTPError as e:
         # erro HTTP permanente (4xx, 5xx) → loga e sai
+        # (HTTPError é subclasse de URLError — DEVE vir ANTES do handler de rede)
         body = ""
         try:
             body = e.read().decode()[:200]
@@ -223,6 +219,11 @@ while elapsed < timeout:
             pass
         print(f"\u274c erro HTTP {e.code} ao consultar sess\u00e3o: {body}", file=sys.stderr)
         sys.exit(3)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # ALTA (a): retry apenas em erros transientes de rede
+        time.sleep(interval)
+        elapsed += interval
+        continue
     except json.JSONDecodeError as e:
         # JSON inv\u00e1lido → loga e sai
         print(f"\u274c resposta inv\u00e1lida do servidor (JSON): {e}", file=sys.stderr)
