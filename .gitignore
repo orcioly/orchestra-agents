@@ -12,3 +12,7 @@ state/
 # contexto local do Claude (não versionar)
 CLAUDE.md
 CLAUDE.local.md
+
+# Python bytecode cache (gerado ao importar merge_reviewer em testes)
+__pycache__/
+*.pyc
