@@ -57,6 +57,24 @@ OPENCODE="$(_resolve_opencode)"
 
 oc_up() { curl -s --max-time 2 "$OC_URL/api/session" >/dev/null 2>&1; }
 
+# resolve o config do OpenCode respeitando OPENCODE_CONFIG e XDG_CONFIG_HOME
+oc_config_path() {
+  if [ -n "${OPENCODE_CONFIG:-}" ]; then echo "$OPENCODE_CONFIG"; return; fi
+  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  [ -f "$dir/opencode.jsonc" ] && { echo "$dir/opencode.jsonc"; return; }
+  [ -f "$dir/opencode.json" ]  && { echo "$dir/opencode.json";  return; }
+  echo "$dir/opencode.jsonc"
+}
+
+# garante o agente 'reviewer' no config do OpenCode — automático e idempotente.
+# Roda ANTES de subir o servidor p/ que o OpenCode recém-iniciado já leia o agente.
+ensure_reviewer_agent() {
+  local script="$ORCHESTRA_HOME/config/merge_reviewer.py"
+  local tmpl="$ORCHESTRA_HOME/config/opencode.reviewer.jsonc"
+  [ -f "$script" ] && [ -f "$tmpl" ] && command -v python3 >/dev/null 2>&1 || return 0
+  python3 "$script" "$(oc_config_path)" "$tmpl" >/dev/null 2>&1 || true
+}
+
 ensure_server() {
   oc_up && return 0
   # destaca o servidor de forma portátil: setsid no Linux (idiomático),

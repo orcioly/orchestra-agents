@@ -23,6 +23,16 @@ c_err(){ printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 in_path(){ case ":$PATH:" in *":$1:"*) return 0;; *) return 1;; esac; }
 
+# Resolve o caminho do config do OpenCode respeitando overrides do próprio OpenCode,
+# para escrever na pasta CERTA (não quebrar quem usa XDG_CONFIG_HOME ou OPENCODE_CONFIG).
+oc_config_path() {
+  if [ -n "${OPENCODE_CONFIG:-}" ]; then echo "$OPENCODE_CONFIG"; return; fi
+  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  [ -f "$dir/opencode.jsonc" ] && { echo "$dir/opencode.jsonc"; return; }
+  [ -f "$dir/opencode.json" ]  && { echo "$dir/opencode.json";  return; }
+  echo "$dir/opencode.jsonc"   # default a criar
+}
+
 # Escolhe um diretório de instalação do CLI que JÁ esteja no PATH e seja gravável,
 # para que 'orchestra' funcione na mesma sessão, sem configuração manual.
 # (o instalador roda via 'curl | bash' herdando o PATH real do usuário)
@@ -141,15 +151,18 @@ fi
 mkdir -p "$HOME/.config/zellij/layouts"
 cp -f "$INSTALL_DIR/layouts/team.kdl" "$HOME/.config/zellij/layouts/orchestra.kdl" 2>/dev/null || true
 
-# 7) checagem do agente reviewer no OpenCode
-OC_CFG="$HOME/.config/opencode/opencode.jsonc"
-if [ -f "$OC_CFG" ] && grep -q '"reviewer"' "$OC_CFG"; then
-  c_ok "Agente 'reviewer' encontrado na config do OpenCode."
-else
-  c_warn "Agente 'reviewer' NÃO encontrado no OpenCode."
-  c_warn "Adicione o bloco de:  $INSTALL_DIR/config/opencode.reviewer.jsonc"
-  c_warn "ao seu $OC_CFG (e ajuste o modelo)."
-fi
+# 7) agente reviewer no OpenCode — configuração AUTOMÁTICA (sem passo manual)
+OC_CFG="$(oc_config_path)"
+set +e
+python3 "$INSTALL_DIR/config/merge_reviewer.py" "$OC_CFG" "$INSTALL_DIR/config/opencode.reviewer.jsonc"
+rc=$?
+set -e
+case "$rc" in
+  0)  c_ok "Agente 'reviewer' configurado automaticamente em $OC_CFG." ;;
+  10) c_ok "Agente 'reviewer' já estava configurado no OpenCode." ;;
+  *)  c_warn "Não consegui mesclar o 'reviewer' em $OC_CFG com segurança."
+      c_warn "Bloco de referência: $INSTALL_DIR/config/opencode.reviewer.jsonc" ;;
+esac
 
 printf '\n'
 c_ok "Instalação concluída! 🎼"

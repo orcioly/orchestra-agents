@@ -50,6 +50,7 @@ case "$cmd" in
     fi
     echo "$proj" >"$ORCHESTRA_STATE/project"
     echo "🎼 subindo Orchestra no projeto: $proj"
+    ensure_reviewer_agent   # auto-configura o agente revisor no OpenCode (idempotente)
     ensure_server || { echo "❌ servidor OpenCode não subiu — veja $ORCHESTRA_STATE/server.log"; exit 1; }
     # sessões FRESCAS a cada 'up' → começa com contexto limpo
     ensure_session coder    "$ORCHESTRA_CODER_AGENT"    "CODER (executor)"    fresh >/dev/null
