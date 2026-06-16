@@ -139,6 +139,7 @@ PY
 result() { # $1 role
   local role="${1:-}" f sid
   [ -n "$role" ] || { echo "uso: orchestra result coder|reviewer"; return 1; }
+  case "$role" in coder|reviewer) ;; *) echo "papel inválido: '$role' (use coder|reviewer)"; return 1 ;; esac
   f="$ORCHESTRA_STATE/$role.session"
   [ -s "$f" ] || { echo "sessão de '$role' não existe"; return 1; }
   sid="$(cat "$f")"
@@ -156,9 +157,15 @@ print(txt or '(processando ou resposta sem texto)')"
 # resultado BLOQUEANTE: faz poll a cada ~3s no endpoint /session/<sid>/message
 # até a resposta do worker à ÚLTIMA tarefa despachada estar COMPLETA.
 # usa o baseline salvo em dispatch() para detectar mensagem assistant NOVA.
-result_wait() { # $1 role  $2 timeout_segundos (padrão 300)
-  local role="${1:-}" timeout="${2:-300}" f sid baseline
-  [ -n "$role" ] || { echo "uso: orchestra result <papel> --wait [timeout_segundos]"; return 1; }
+result_wait() { # $1 role  $2 timeout_segundos (padrão 300)  $3 caller (opcional: "await")
+  local role="${1:-}" timeout="${2:-300}" caller="${3:-}" f sid baseline
+  local usage_msg
+  if [ "$caller" = "await" ]; then
+    usage_msg="uso: orchestra await <papel> [timeout_segundos]"
+  else
+    usage_msg="uso: orchestra result <papel> --wait [timeout_segundos]"
+  fi
+  [ -n "$role" ] || { echo "$usage_msg"; return 1; }
   case "$role" in coder|reviewer) ;; *) echo "papel inválido: '$role' (use coder|reviewer)"; return 1 ;; esac
   # BLOCKER 1: valida timeout no bash com regex de dígitos puros
   if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then

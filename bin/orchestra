@@ -79,7 +79,7 @@ case "$cmd" in
         *) [[ "$a" =~ ^[0-9]+$ ]] && timeout="$a" ;;  # BLOCKER 1: só dígitos puros
       esac
     done
-    result_wait "${role:-${1:-}}" "$timeout"
+    result_wait "${role:-${1:-}}" "$timeout" "await"
     ;;
   status)   status ;;
   doctor)   doctor ;;
