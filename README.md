@@ -29,7 +29,7 @@ Orchestra usa a arquitetura **cliente/servidor** do OpenCode:
 - **`opencode serve`** sobe um servidor headless compartilhado (porta `4096`).
 - Cada worker é uma **TUI real** attachada a uma sessão: `opencode attach <url> --session <id>`.
 - O líder injeta tarefas via API **assíncrona** (`POST /session/:id/prompt_async`, HTTP 204 instantâneo) — o worker processa em background e renderiza ao vivo na própria TUI.
-- Resultados são lidos **sob demanda** (`orchestra result`), nunca em loop — por isso o líder não desperdiça tokens esperando.
+- Resultados são lidos via `orchestra result <papel> --wait` (bloqueante, eficiente — o líder encadeia automaticamente) ou `orchestra result <papel>` (sob demanda, não-bloqueante).
 
 ---
 
@@ -87,7 +87,7 @@ você ▸ cria um endpoint POST /users com validação e depois manda revisar
 Claude (LÍDER) ▸ delega ao CODER... (roda no painel ao lado) e depois ao REVISOR
 ```
 
-Você não precisa decorar comando nenhum. O líder despacha de forma assíncrona e busca os resultados pra você.
+Você não precisa decorar comando nenhum. O líder despacha de forma assíncrona, busca os resultados automaticamente com `--wait` e reporta.
 
 ### Modo manual (controle fino)
 
@@ -96,7 +96,9 @@ Se quiser comandar na unha:
 ```bash
 orchestra send coder    "crie um endpoint POST /users com validação"
 orchestra send reviewer "revise as últimas mudanças e aponte bugs"
-orchestra result coder  # vê a resposta quando quiser (sob demanda)
+orchestra result coder --wait   # espera a resposta completa (bloqueante)
+orchestra result coder          # vê a resposta quando quiser (não-bloqueante)
+orchestra await coder           # alias de result --wait
 orchestra status        # estado do servidor/sessões
 orchestra down          # encerra o servidor
 ```
@@ -108,7 +110,9 @@ orchestra down          # encerra o servidor
 | `orchestra` | Atalho para `orchestra up` no diretório atual |
 | `orchestra up [dir]` | Sobe o time no zellij no projeto `dir` (padrão: diretório atual) |
 | `orchestra send <papel> "<tarefa>"` | Despacha tarefa **assíncrona** (`papel` = `coder` \| `reviewer`) |
-| `orchestra result <papel>` | Mostra a última resposta do worker |
+| `orchestra result <papel>` | Mostra a última resposta do worker (não-bloqueante) |
+| `orchestra result <papel> --wait [s]` | Bloqueia até resposta completa (padrão: 300s) |
+| `orchestra await <papel> [s]` | Alias de `result --wait` |
 | `orchestra status` | Estado do servidor e das sessões |
 | `orchestra down` | Encerra o servidor OpenCode |
 | `orchestra uninstall` | Remove o Orchestra Agents por completo |

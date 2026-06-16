@@ -113,6 +113,8 @@ dispatch() { # $1 role  $2.. texto
   f="$ORCHESTRA_STATE/$role.session"
   [ -s "$f" ] || { echo "❌ sessão de '$role' não existe — rode 'orchestra up' primeiro"; return 1; }
   sid="$(cat "$f")"
+  # salva baseline (contagem de mensagens pré-despacho) para --wait detectar resposta nova
+  printf '%s' "$(_session_msgcount "$sid")" >"$ORCHESTRA_STATE/$role.baseline"
   python3 - "$OC_URL" "$sid" "$text" "$agent" "$ORCHESTRA_MODEL" <<'PY'
 import sys, json, urllib.request, urllib.error
 url, sid, text, agent, model = sys.argv[1:6]
@@ -149,6 +151,109 @@ if not asst:
 m = asst[-1]
 txt = ' '.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
 print(txt or '(processando ou resposta sem texto)')"
+}
+
+# resultado BLOQUEANTE: faz poll a cada ~3s no endpoint /session/<sid>/message
+# até a resposta do worker à ÚLTIMA tarefa despachada estar COMPLETA.
+# usa o baseline salvo em dispatch() para detectar mensagem assistant NOVA.
+result_wait() { # $1 role  $2 timeout_segundos (padrão 300)
+  local role="${1:-}" timeout="${2:-300}" f sid baseline
+  [ -n "$role" ] || { echo "uso: orchestra result <papel> --wait [timeout_segundos]"; return 1; }
+  case "$role" in coder|reviewer) ;; *) echo "papel inválido: '$role' (use coder|reviewer)"; return 1 ;; esac
+  # BLOCKER 1: valida timeout no bash com regex de dígitos puros
+  if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+    echo "❌ timeout inválido: '$timeout' (deve ser número inteiro positivo de segundos)" >&2; return 1
+  fi
+  f="$ORCHESTRA_STATE/$role.session"
+  [ -s "$f" ] || { echo "sessão de '$role' não existe"; return 1; }
+  sid="$(cat "$f")"
+  # BLOCKER 3: baseline ausente → avisa e usa contagem atual como referência,
+  # para NÃO retornar resposta antiga/stale como se fosse nova.
+  if [ -s "$ORCHESTRA_STATE/$role.baseline" ]; then
+    baseline="$(cat "$ORCHESTRA_STATE/$role.baseline")"
+  else
+    echo "⚠️  baseline ausente (sem dispatch prévio?) — usando contagem atual como referência" >&2
+    baseline="$(_session_msgcount "$sid")"
+  fi
+  # defesa: baseline deve ser dígitos puros
+  [[ "$baseline" =~ ^[0-9]+$ ]] || baseline=0
+  python3 - "$OC_URL" "$sid" "$baseline" "$timeout" <<'PY'
+import sys, json, time, urllib.request, urllib.error
+url, sid, baseline_str, timeout_str = sys.argv[1:5]
+
+# BLOCKER 1: try/except ValueError para conversões, com erro amigável em stderr
+try:
+    baseline = int(baseline_str)
+except ValueError:
+    print(f"\u274c baseline inv\u00e1lido: '{baseline_str}' (deve ser n\u00famero inteiro)", file=sys.stderr)
+    sys.exit(1)
+try:
+    timeout = int(timeout_str)
+except ValueError:
+    print(f"\u274c timeout inv\u00e1lido: '{timeout_str}' (deve ser n\u00famero inteiro de segundos)", file=sys.stderr)
+    sys.exit(1)
+
+elapsed = 0
+interval = 3
+messages = []
+
+while elapsed < timeout:
+    try:
+        resp = urllib.request.urlopen(f"{url}/session/{sid}/message", timeout=10)
+        data = json.load(resp)
+        messages = data if isinstance(data, list) else data.get('data', [])
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # ALTA (a): retry apenas em erros transientes de rede
+        time.sleep(interval)
+        elapsed += interval
+        continue
+    except urllib.error.HTTPError as e:
+        # erro HTTP permanente (4xx, 5xx) → loga e sai
+        body = ""
+        try:
+            body = e.read().decode()[:200]
+        except Exception:
+            pass
+        print(f"\u274c erro HTTP {e.code} ao consultar sess\u00e3o: {body}", file=sys.stderr)
+        sys.exit(3)
+    except json.JSONDecodeError as e:
+        # JSON inv\u00e1lido → loga e sai
+        print(f"\u274c resposta inv\u00e1lida do servidor (JSON): {e}", file=sys.stderr)
+        sys.exit(3)
+
+    # busca mensagens assistant NOVAS (\u00edndice >= baseline, ap\u00f3s as pr\u00e9-despacho)
+    new_asst = []
+    for i, m in enumerate(messages):
+        info = m.get('info', {}) or {}
+        if info.get('role') == 'assistant' and i >= baseline:
+            new_asst.append(m)
+
+    if new_asst:
+        m = new_asst[-1]
+        info = m.get('info', {}) or {}
+        tinfo = info.get('time', {}) or {}
+        completed = tinfo.get('completed')
+        txt = ' '.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
+
+        if completed and txt:
+            print(txt)
+            sys.exit(0)
+
+    time.sleep(interval)
+    elapsed += interval
+
+# timeout: mostra o que houver com aviso em stderr e marca parcial no stdout (exit 2)
+# ALTA (b): prefixo [TIMEOUT/PARCIAL] deixa claro que o texto não é confiável
+print(f"\u26a0\ufe0f  timeout ({timeout}s) — mostrando resposta parcial, se houver:", file=sys.stderr)
+asst = [m for m in messages if (m.get('info', {}) or {}).get('role') == 'assistant']
+if asst:
+    m = asst[-1]
+    txt = ' '.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
+    print(f"[TIMEOUT/PARCIAL] {txt}" if txt else "[TIMEOUT/PARCIAL] (processando ou resposta sem texto)")
+else:
+    print("[TIMEOUT/PARCIAL] (sem resposta ainda)")
+sys.exit(2)
+PY
 }
 
 status() {

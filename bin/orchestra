@@ -16,7 +16,11 @@ uso:
                                no projeto 'dir' (padrão: diretório atual)
   orchestra send <papel> <txt> despacha tarefa de forma ASSÍNCRONA (não bloqueia)
                                papel: coder | reviewer
-  orchestra result <papel>     mostra a última resposta do worker (sob demanda)
+  orchestra result <papel>     mostra a última resposta do worker (não-bloqueante)
+  orchestra result <papel> --wait [timeout_segundos]
+                               BLOQUEIA até resposta completa (padrão 300s)
+  orchestra await <papel> [timeout_segundos]
+                               alias de 'result <papel> --wait'
   orchestra status             estado do servidor e das sessões
   orchestra doctor             diagnostica pré-requisitos, modelo, agente e servidor
   orchestra down               encerra o servidor OpenCode
@@ -27,7 +31,8 @@ exemplos:
   orchestra up ~/meu-projeto
   orchestra send coder    "crie um endpoint POST /users com validação"
   orchestra send reviewer "revise as últimas mudanças e aponte bugs"
-  orchestra result reviewer
+  orchestra result coder --wait
+  orchestra await reviewer 120
 EOF
 }
 
@@ -52,7 +57,30 @@ case "$cmd" in
     exec zellij --layout "$ORCHESTRA_HOME/layouts/team.kdl"
     ;;
   send)     dispatch "$@" ;;
-  result)   result "${1:-}" ;;
+  result)
+    role="${1:-}"
+    if [ "$role" = "--wait" ]; then
+      # BLOCKER 2: $2 = papel, $3 = timeout (opcional)
+      role="${2:-}"; timeout="${3:-300}"
+      result_wait "$role" "$timeout"
+    elif [ "${2:-}" = "--wait" ]; then
+      # 'result <papel> --wait [timeout]'
+      timeout="${3:-300}"
+      result_wait "$role" "$timeout"
+    else
+      result "$role"
+    fi
+    ;;
+  await)
+    role=""; timeout=300
+    for a in "$@"; do
+      case "$a" in
+        coder|reviewer) role="$a" ;;
+        *) [[ "$a" =~ ^[0-9]+$ ]] && timeout="$a" ;;  # BLOCKER 1: só dígitos puros
+      esac
+    done
+    result_wait "${role:-${1:-}}" "$timeout"
+    ;;
   status)   status ;;
   doctor)   doctor ;;
   down)     teardown ;;
