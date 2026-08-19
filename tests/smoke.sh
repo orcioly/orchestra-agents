@@ -147,6 +147,23 @@ msg="$("$ORCH" add semia --prompt "x" </dev/null 2>&1 || true)"
 case "$msg" in *'falta dizer qual IA'*) ;; *) no "add sem --ia deveria falhar pedindo a IA" ;; esac
 team_exists semia && no "add sem --ia não deveria ter criado o agente"
 
+# OpenCode e Codex recebem o prompt de papel como PRIMEIRA MENSAGEM: sem instrução
+# explícita, o worker começa a trabalhar sozinho ao abrir (o reviewer saía revisando).
+for r in reviewer coder; do
+  case "$(team_prompt_for "$r")" in
+    *'NÃO comece a trabalhar'*) ;;
+    *) no "o prompt de '$r' deveria mandar aguardar em vez de agir ao iniciar" ;;
+  esac
+  case "$(team_prompt_for "$r")" in
+    *'Apresente-se em uma linha e aguarde.') ;;
+    *) no "o prompt de '$r' deveria TERMINAR mandando aguardar (recência)" ;;
+  esac
+done
+case "$(team_leader_prompt)" in
+  *'não comece a analisar o projeto nem a delegar nada'*) ;;
+  *) no "o líder também deveria aguardar em vez de agir ao iniciar" ;;
+esac
+
 # nenhum agente pode editar a instalação do Orchestra nem sair do projeto
 case "$(team_prompt_for coder)" in
   *'NUNCA edite a instalação do Orchestra'*) ;;
