@@ -292,7 +292,34 @@ sess_test="orchestra-$(printf '%s' "$(basename /tmp/proj-x)" | tr -c 'a-zA-Z0-9_
 case "$sess_test" in *--*) no "nome de sessão com hífen duplo"; z_ok=0 ;; esac
 [ "$z_ok" = 1 ] && ok "zellij é lançado com -n e o nome de sessão é limpo"
 
-echo "11) orchestra doctor"
+echo "11) Desinstalação em um comando"
+u_ok=1
+# o usuário não tem como saber que precisa encerrar sessões antes: o uninstall faz
+case "$(sed -n '/^uninstall()/,/^}/p' "$ROOT/lib/core.sh")" in
+  *kill_all_sessions*) ;;
+  *) no "uninstall deveria encerrar as sessões sozinho"; u_ok=0 ;;
+esac
+grep -q "grep '\^orchestra-'" "$ROOT/lib/core.sh" \
+  || { no "só sessões 'orchestra-*' podem ser encerradas"; u_ok=0; }
+grep -q "grep '\^orchestra-'" "$ROOT/uninstall.sh" \
+  || { no "o uninstall standalone também deveria encerrar as sessões"; u_ok=0; }
+case "$(sed -n '/^uninstall()/,/^}/p' "$ROOT/lib/core.sh")" in
+  *'hash -r'*) ;;
+  *) no "uninstall deveria avisar sobre o cache de comandos do shell"; u_ok=0 ;;
+esac
+# só o zellij que o instalador baixou pode ser removido
+grep -q 'zellij.ours' "$ROOT/install.sh" \
+  || { no "o instalador deveria marcar quando ele mesmo instala o zellij"; u_ok=0; }
+grep -q 'zellij.ours' "$ROOT/lib/core.sh" \
+  || { no "uninstall deveria remover o zellij que o Orchestra instalou"; u_ok=0; }
+grep -q 'zellij.ours' "$ROOT/uninstall.sh" \
+  || { no "o uninstall standalone também deveria remover esse zellij"; u_ok=0; }
+# a desinstalação precisa estar documentada para o usuário
+grep -q '^## 🗑️ Desinstalação' "$ROOT/README.md" \
+  || { no "o README precisa de uma seção de desinstalação"; u_ok=0; }
+[ "$u_ok" = 1 ] && ok "uninstall em um comando: sessões, zellij próprio e documentação"
+
+echo "12) orchestra doctor"
 if "$ORCH" doctor >/dev/null 2>&1; then ok "doctor sem falhas (exit 0)"
 else skipt "doctor com falhas — esperado se claude/opencode/codex não estão neste host"; fi
 

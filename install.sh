@@ -114,8 +114,16 @@ install_zellij(){
   mkdir -p "$BIN_DIR"; install -m 0755 "$tmp/zellij" "$BIN_DIR/zellij"
   rm -rf "$tmp"
 }
-if have zellij; then c_ok "zellij já instalado ($(zellij --version 2>/dev/null))"
-else install_zellij && c_ok "zellij instalado em $BIN_DIR"; fi
+if have zellij; then
+  c_ok "zellij já instalado ($(zellij --version 2>/dev/null))"
+else
+  # marcador: só o zellij que NÓS instalamos é removido no uninstall — quem já
+  # tinha zellij antes não pode perdê-lo por desinstalar o Orchestra.
+  if install_zellij; then
+    c_ok "zellij instalado em $BIN_DIR"
+    mkdir -p "$STATE_DIR" && printf '%s' "$BIN_DIR/zellij" >"$STATE_DIR/zellij.ours"
+  fi
+fi
 
 # 3) baixa/atualiza o repositório
 c_say "Instalando Orchestra Agents em $INSTALL_DIR ..."

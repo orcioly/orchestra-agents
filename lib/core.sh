@@ -495,6 +495,20 @@ status() {
   agents_list
 }
 
+# Encerra TODAS as sessões do Orchestra, de todos os projetos. O 'teardown' cuida
+# só da sessão registrada no estado; quem tem vários projetos abertos deixaria as
+# outras para trás — e o usuário não tem como saber disso ao desinstalar.
+kill_all_sessions() {
+  command -v zellij >/dev/null 2>&1 || return 0
+  local s n=0
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    zellij delete-session --force "$s" >/dev/null 2>&1 && { echo "  🛑 sessão '$s' encerrada"; n=$((n+1)); }
+  done < <(zellij list-sessions --no-formatting 2>/dev/null | awk '{print $1}' | grep '^orchestra-' || true)
+  [ "$n" = 0 ] && echo "  (nenhuma sessão do Orchestra estava aberta)"
+  return 0
+}
+
 teardown() {
   local s; s="$(mux_session 2>/dev/null)"
   if [ -n "$s" ] && [ "$(mux_backend)" = zellij ]; then
@@ -777,7 +791,7 @@ doctor() {
 # remove COMPLETAMENTE o Orchestra Agents (preserva zellij/claude/opencode/codex)
 uninstall() {
   echo "🧹 Desinstalando Orchestra Agents..."
-  teardown >/dev/null 2>&1 || true
+  kill_all_sessions
   # 1) symlink(s) do CLI no PATH (+ o local registrado na instalação)
   local d tgt bindir rc tmp IFSorig
   bindir="$(cat "$ORCHESTRA_STATE/bindir" 2>/dev/null || true)"
@@ -798,11 +812,28 @@ uninstall() {
       && mv "$tmp" "$rc" && echo "  PATH removido de $rc"
   done
   rm -f "$HOME/.config/fish/conf.d/orchestra.fish"
-  # 3) layout do zellij
+  # 3) zellij — só se foi o instalador do Orchestra que o colocou aqui
+  local zj; zj="$(cat "$ORCHESTRA_STATE/zellij.ours" 2>/dev/null || true)"
+  if [ -n "$zj" ] && [ -f "$zj" ]; then
+    rm -f "$zj" && echo "  removido $zj (tinha sido instalado pelo Orchestra)"
+  elif command -v zellij >/dev/null 2>&1; then
+    echo "  zellij preservado (já existia antes do Orchestra)"
+  fi
+
+  # 4) layout do zellij
   rm -f "$HOME/.config/zellij/layouts/orchestra.kdl"
-  # 4) diretórios de config, estado e instalação
+  # 5) diretórios de config, estado e instalação
   rm -rf "$HOME/.config/orchestra-agents" "$ORCHESTRA_STATE" "$ORCHESTRA_HOME"
   echo "✅ Orchestra Agents removido por completo."
-  echo "   (o .orchestra/ dos seus projetos foi preservado — é a composição do time.)"
-  echo "   (zellij, Claude Code, OpenCode e Codex foram preservados.)"
+  echo
+  echo "   Preservado de propósito:"
+  echo "     · o .orchestra/ dos seus projetos (é a composição do time, sua)"
+  echo "     · Claude Code, OpenCode e Codex (ferramentas suas, não do Orchestra)"
+  echo "     · o agente 'reviewer' na config do OpenCode — remova à mão se quiser:"
+  echo "       $(oc_config_path)"
+  # o shell guarda em cache o caminho do comando removido; sem isto, um 'orchestra'
+  # logo em seguida falha com uma mensagem confusa em vez de 'command not found'.
+  echo
+  echo "   Se for reinstalar nesta mesma janela, limpe o cache de comandos antes:"
+  echo "     hash -r    (bash)     ·     rehash    (zsh)"
 }

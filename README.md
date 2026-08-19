@@ -386,6 +386,48 @@ meu-projeto/.orchestra/
 
 ---
 
+## 🗑️ Desinstalação
+
+**Um comando só.** Ele faz tudo: encerra as sessões abertas (de todos os projetos), remove o
+comando `orchestra`, as linhas de `PATH` que tiver criado, o estado, o diretório de instalação
+e até o zellij — se tiver sido o instalador do Orchestra que o colocou aí.
+
+```bash
+orchestra uninstall
+```
+
+Ou, se o comando já não existir (ou você preferir):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
+```
+
+Você **não** precisa dar `orchestra down` antes, nem fechar painel nenhum.
+
+O que ele **preserva**, de propósito:
+
+| Preservado | Por quê |
+|------------|---------|
+| `.orchestra/` dos seus projetos | é a composição do seu time, sua — não do Orchestra |
+| Claude Code, OpenCode, Codex | ferramentas suas, usadas fora do Orchestra |
+| zellij que **você** já tinha | só é removido o que o instalador do Orchestra baixou |
+| agente `reviewer` na config do OpenCode | é uma entrada na sua config; o caminho é mostrado no fim |
+
+> Se for **reinstalar na mesma janela** do terminal, limpe o cache de comandos do shell —
+> `hash -r` no bash, `rehash` no zsh. Sem isso ele ainda aponta para o binário removido e você
+> vê um erro confuso. O próprio desinstalador lembra disso no fim.
+
+### Reinstalar do zero
+
+```bash
+orchestra uninstall
+hash -r 2>/dev/null || rehash 2>/dev/null || true
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
+orchestra doctor
+```
+
+---
+
 ## 🧩 Estrutura
 
 ```
