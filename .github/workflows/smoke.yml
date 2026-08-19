@@ -14,7 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run smoke test (mux stub + fake backends: no zellij or AI CLI needed)
+      - name: Run smoke test (mux stub + fake backends, no zellij or AI CLI needed)
         run: bash tests/smoke.sh
 
       - name: ShellCheck (informational)
