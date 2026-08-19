@@ -441,11 +441,13 @@ orchestra-agents/
 │   ├── mux.sh                   # abstração do multiplexador (zellij | stub)
 │   └── layout.sh                # gera o layout KDL do time
 ├── agents/
-│   ├── run-agent.sh             # launcher + supervisor de um agente (qualquer backend)
+│   ├── run-agent.sh             # launcher + supervisor de um agente (qualquer IA)
 │   ├── leader-prompt.md         # instruções de orquestração do líder
 │   ├── roles/*.md               # prompts dos papéis prontos
 │   └── leader.sh, attach-*.sh   # compat shims → run-agent.sh
-└── config/opencode.reviewer.jsonc  # agente reviewer de referência
+└── config/
+    ├── opencode.reviewer.jsonc  # agente reviewer de referência
+    └── merge_reviewer.py        # mescla esse agente na sua config do OpenCode
 ```
 
 ---
