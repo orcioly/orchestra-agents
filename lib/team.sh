@@ -221,6 +221,18 @@ team_worker_protocol() { # $1 nome
   pedir isso explicitamente — ainda assim, mexa apenas nos arquivos do projeto, nunca na
   cópia instalada.
 
+## Ao iniciar — NÃO comece a trabalhar
+
+Estas instruções podem ter chegado como a PRIMEIRA MENSAGEM deste painel (é assim que
+OpenCode e Codex recebem). Elas descrevem quem você é; **não são uma tarefa**.
+
+Agora, ao lê-las: não analise o repositório, não rode comandos, não edite nada.
+Responda apenas UMA linha curta se apresentando — por exemplo: \`pronto, aguardando o líder\`.
+
+Você só age quando:
+- chegar uma mensagem com o bloco \`[ORCHESTRA task=<id>]\` (tarefa do líder); ou
+- o usuário falar diretamente com você neste painel.
+
 ## Protocolo do Orchestra (obrigatório)
 
 Você recebe tarefas do LÍDER como mensagens que terminam com um bloco
@@ -233,6 +245,10 @@ Você recebe tarefas do LÍDER como mensagens que terminam com um bloco
 Use o \`<id>\` exato que veio na tarefa. Sem esse comando o líder fica esperando e
 a tarefa expira por timeout. Mensagens digitadas pelo usuário direto no seu painel
 (sem o bloco \`[ORCHESTRA task=...]\`) NÃO precisam do \`orchestra done\`.
+
+---
+
+**Agora**: nenhuma tarefa foi pedida ainda. Apresente-se em uma linha e aguarde.
 EOF
 }
 
