@@ -17,7 +17,6 @@ fi
 # fallback self-contained (se o diretório de instalação já sumiu)
 echo "🧹 Desinstalando Orchestra Agents (modo standalone)..."
 STATE_DIR="${ORCHESTRA_STATE:-$HOME/.local/state/orchestra-agents}"
-pkill -f "opencode serve --port ${ORCHESTRA_PORT:-4096}" 2>/dev/null || true
 bindir="$(cat "$STATE_DIR/bindir" 2>/dev/null || true)"
 [ -n "$bindir" ] && rm -f "$bindir/orchestra"
 IFSorig="$IFS"; IFS=:
