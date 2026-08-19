@@ -47,7 +47,7 @@ _mux_agent_cmd_marker() { echo "run-agent.sh $1"; }
 # ---------------------------------------------------------------------------
 
 # nome da sessão zellij: preferimos a do ambiente (estamos dentro de um painel),
-# senão a registrada pelo 'orchestra up'.
+# senão a registrada ao subir o time.
 _zj_session() {
   if [ -n "${ZELLIJ_SESSION_NAME:-}" ]; then echo "$ZELLIJ_SESSION_NAME"; return 0; fi
   local s; s="$(cat "$ORCHESTRA_STATE/mux.session" 2>/dev/null)"
@@ -57,7 +57,7 @@ _zj_session() {
 
 # wrapper de 'zellij action' já mirando a sessão certa
 _zj() {
-  local s; s="$(_zj_session)" || { echo "❌ sessão do zellij desconhecida (rode 'orchestra up')" >&2; return 1; }
+  local s; s="$(_zj_session)" || { echo "❌ sessão do zellij desconhecida (rode 'orchestra')" >&2; return 1; }
   zellij -s "$s" action "$@"
 }
 

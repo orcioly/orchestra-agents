@@ -180,7 +180,7 @@ _pane_for() { # $1 agente  → ecoa pane-id
   local agent="$1" pane
   pane="$(mux_pane_id "$agent" 2>/dev/null)"
   if [ -n "$pane" ]; then echo "$pane"; return 0; fi
-  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra up'" >&2; return 1; }
+  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra'" >&2; return 1; }
   echo "⚠️  painel de '$agent' não está aberto — recriando…" >&2
   pane="$(mux_new_pane "$agent" "$ORCHESTRA_PROJECT")" || {
     echo "❌ não consegui recriar o painel de '$agent'" >&2; return 1; }
@@ -370,7 +370,7 @@ _resolve_role() { # $1 nome  [$2 role desejado]  [$3 texto do prompt]
 
 # Avisa o LÍDER, AO VIVO, que o time mudou — injetando a nota no painel dele.
 # Sem isto o líder só conhece o time montado quando o painel dele subiu, e um agente
-# criado depois seria ignorado até o próximo 'orchestra up'.
+# criado depois seria ignorado até o próximo 'orchestra'.
 notify_leader() { # $1 texto
   local pane self
   mux_available || return 0
@@ -428,7 +428,7 @@ agent_add() { # $1 nome  [$2 backend]  [$3 role]  [$4 texto do prompt]
   if mux_available; then
     mux_new_pane "$name" "$ORCHESTRA_PROJECT" >/dev/null && echo "  🎬 painel aberto"
   else
-    echo "  (sem multiplexador ativo — o painel abre no próximo 'orchestra up')"
+    echo "  (sem multiplexador ativo — o painel abre no próximo 'orchestra')"
   fi
   notify_leader "$(cat <<EOF
 [ORCHESTRA] O time mudou: o agente '$name' entrou agora ($backend).
@@ -457,7 +457,7 @@ agent_rm() { # $1 nome
 # recria os painéis de agentes cujo painel morreu/foi fechado
 heal() {
   team_ensure
-  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra up'" >&2; return 1; }
+  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra'" >&2; return 1; }
   local n missing=0
   while IFS= read -r n; do
     [ -n "$n" ] || continue
@@ -481,7 +481,7 @@ leader_set() { # $1 backend
   pane="$(mux_pane_id leader 2>/dev/null)"
   if [ -n "$pane" ]; then
     echo "  ⚠️  o painel do líder ainda roda o backend anterior."
-    echo "     Feche-o (Ctrl-C durante a contagem) ou rode 'orchestra up' de novo para aplicar."
+    echo "     Feche-o (Ctrl-C durante a contagem) ou rode 'orchestra' de novo para aplicar."
   fi
 }
 
@@ -489,7 +489,7 @@ status() {
   team_ensure
   local s; s="$(mux_session 2>/dev/null)"
   if mux_available; then echo "🟢 multiplexador: $(mux_backend) (sessão ${s:-?})"
-  else echo "⚪ multiplexador: fora do ar (rode 'orchestra up')"; fi
+  else echo "⚪ multiplexador: fora do ar (rode 'orchestra')"; fi
   echo "   projeto: $ORCHESTRA_PROJECT"
   echo "   time:    $(team_file)"
   agents_list
@@ -770,7 +770,7 @@ doctor() {
       else _dwarn "painel de $n ausente — 'orchestra heal' recria"; fi
     done < <(team_all_names)
   else
-    _dwarn "nenhuma sessão ativa (sobe ao rodar 'orchestra up')"
+    _dwarn "nenhuma sessão ativa (sobe ao rodar 'orchestra')"
   fi
 
   echo; echo "Orchestra:"

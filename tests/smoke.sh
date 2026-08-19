@@ -278,7 +278,21 @@ grep -q 'pane name="✨ ZETA"' "$lay2" || { no "layout não usou o rótulo padro
 "$ORCH" rm zeta >/dev/null 2>&1
 [ "$p_ok" = 1 ] && ok "prompt de papel sempre enviado + rótulos ícone/MAIÚSCULAS"
 
-echo "10) Lançamento do zellij"
+echo "10) Subir o time é a ação padrão (sem 'up')"
+s_ok=1
+# 'orchestra <dir>' precisa subir naquele projeto; caminho inexistente é erro claro
+msg="$("$ORCH" /nao/existe/mesmo 2>&1 || true)"
+case "$msg" in *'diretório não encontrado'*) ;; *) no "caminho inexistente deveria dizer isso, não 'comando desconhecido'"; s_ok=0 ;; esac
+# 'up' continua aceito, mas avisando que é desnecessário
+msg="$(PATH=/usr/bin:/bin "$ORCH" up 2>&1 || true)"
+case "$msg" in *"não é mais necessário"*) ;; *) no "'orchestra up' deveria avisar que virou desnecessário"; s_ok=0 ;; esac
+# e não pode mais aparecer na ajuda
+case "$("$ORCH" help 2>&1)" in
+  *'orchestra up'*) no "a ajuda não deveria mais documentar 'orchestra up'"; s_ok=0 ;;
+esac
+[ "$s_ok" = 1 ] && ok "orchestra / orchestra <dir> · 'up' aceito porém não documentado"
+
+echo "11) Lançamento do zellij"
 z_ok=1
 # regressão: com '--session', o '--layout' do zellij significa "adicione como aba à
 # sessão existente" e falha com "Session not found". Só o '-n' cria a sessão.
@@ -292,7 +306,7 @@ sess_test="orchestra-$(printf '%s' "$(basename /tmp/proj-x)" | tr -c 'a-zA-Z0-9_
 case "$sess_test" in *--*) no "nome de sessão com hífen duplo"; z_ok=0 ;; esac
 [ "$z_ok" = 1 ] && ok "zellij é lançado com -n e o nome de sessão é limpo"
 
-echo "11) Desinstalação em um comando"
+echo "12) Desinstalação em um comando"
 u_ok=1
 # o usuário não tem como saber que precisa encerrar sessões antes: o uninstall faz
 case "$(sed -n '/^uninstall()/,/^}/p' "$ROOT/lib/core.sh")" in
@@ -319,7 +333,7 @@ grep -q '^## 🗑️ Desinstalação' "$ROOT/README.md" \
   || { no "o README precisa de uma seção de desinstalação"; u_ok=0; }
 [ "$u_ok" = 1 ] && ok "uninstall em um comando: sessões, zellij próprio e documentação"
 
-echo "12) orchestra doctor"
+echo "13) orchestra doctor"
 if "$ORCH" doctor >/dev/null 2>&1; then ok "doctor sem falhas (exit 0)"
 else skipt "doctor com falhas — esperado se claude/opencode/codex não estão neste host"; fi
 

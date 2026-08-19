@@ -2,7 +2,7 @@
 # Orchestra Agents — gerador do layout do zellij para o time atual.
 #
 # O layout deixou de ser estático porque o time é dinâmico: N agentes, escolhidos
-# por projeto. Geramos o KDL em $ORCHESTRA_STATE/team.kdl a cada 'orchestra up'.
+# por projeto. Geramos o KDL em $ORCHESTRA_STATE/team.kdl a cada 'orchestra'.
 #
 # Não executar diretamente; é "sourced" pelo lib/core.sh.
 
@@ -21,7 +21,7 @@ generate_layout() {
 
   {
     printf '// Orchestra Agents — layout GERADO automaticamente (não editar à mão).\n'
-    printf '// Regenerado a cada "orchestra up" a partir de %s\n' "$(team_file)"
+    printf '// Regenerado a cada "orchestra" a partir de %s\n' "$(team_file)"
     printf 'layout {\n'
     printf '    pane size=1 borderless=true {\n        plugin location="zellij:tab-bar"\n    }\n'
     printf '    pane split_direction="horizontal" {\n'
