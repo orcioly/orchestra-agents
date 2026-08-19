@@ -10,11 +10,11 @@ layout {
             args "-lc" "exec ${ORCHESTRA_HOME:-$HOME/.orchestra-agents}/agents/leader.sh"
         }
         pane split_direction="vertical" {
-            pane name="CODER (OpenCode TUI)" command="bash" {
-                args "-lc" "exec ${ORCHESTRA_HOME:-$HOME/.orchestra-agents}/agents/attach-coder.sh"
+            pane name="CODER" command="bash" {
+                args "-lc" "exec ${ORCHESTRA_HOME:-$HOME/.orchestra-agents}/agents/attach-worker.sh coder"
             }
-            pane name="REVISOR (OpenCode TUI)" command="bash" {
-                args "-lc" "exec ${ORCHESTRA_HOME:-$HOME/.orchestra-agents}/agents/attach-reviewer.sh"
+            pane name="REVISOR" command="bash" {
+                args "-lc" "exec ${ORCHESTRA_HOME:-$HOME/.orchestra-agents}/agents/attach-worker.sh reviewer"
             }
         }
     }

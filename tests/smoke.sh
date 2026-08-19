@@ -32,9 +32,26 @@ for f in "$ROOT/bin/orchestra" "$ROOT/lib/core.sh" "$ROOT"/agents/*.sh \
 done
 [ "$syn_ok" = 1 ] && ok "todos os scripts passaram no bash -n"
 
+# 1b) compila o cliente Python do Codex (app-server)
+if python3 -m py_compile "$ROOT/lib/codex_client.py" 2>/dev/null; then
+  ok "lib/codex_client.py compila (py_compile)"
+else
+  no "lib/codex_client.py falhou no py_compile"
+fi
+
 # carrega o núcleo (depois do check de sintaxe)
 # shellcheck source=/dev/null
 . "$ROOT/lib/core.sh"
+
+# 1c) seleção de backend por papel (não-interativa via env) e defaults
+echo "1c) Seleção de backend (opencode|codex)"
+sel_ok=1
+[ "$(_role_backend coder)" = opencode ] || { no "default de backend deveria ser opencode"; sel_ok=0; }
+[ "$(ORCHESTRA_CODER=codex; choose_backend coder)" = codex ]        || { no "ORCHESTRA_CODER=codex não selecionou codex"; sel_ok=0; }
+[ "$(ORCHESTRA_REVIEWER=opencode; choose_backend reviewer)" = opencode ] || { no "ORCHESTRA_REVIEWER=opencode não selecionou opencode"; sel_ok=0; }
+[ "$(ORCHESTRA_CODER=banana choose_backend coder 2>/dev/null)" = opencode ] || { no "backend inválido não caiu no default"; sel_ok=0; }
+[ "$(_codex_sandbox coder)" = workspace-write ] && [ "$(_codex_sandbox reviewer)" = read-only ] || { no "sandbox por papel incorreto"; sel_ok=0; }
+[ "$sel_ok" = 1 ] && ok "backend por papel: env-override, defaults e sandbox corretos"
 
 # 2) doctor (não pode retornar falha) — só quando as ferramentas existem (não em CI vazio)
 echo "2) orchestra doctor"

@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# Painel REVISOR — TUI REAL do OpenCode (agente reviewer, read-only) attachada ao servidor.
+# Compat shim → delega ao painel genérico (backend-aware) do papel reviewer.
 ORCHESTRA_HOME="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
-export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
-# shellcheck source=/dev/null
-. "$ORCHESTRA_HOME/lib/core.sh"
-clear
-MDL="$(_effective_model 2>/dev/null)"; [ -n "$ORCHESTRA_MODEL" ] || MDL="${MDL:-default} (OpenCode)"
-echo "🔍 REVISOR — OpenCode TUI (agente $ORCHESTRA_REVIEWER_AGENT · modelo: $MDL)"
-echo "    conectando ao servidor do time..."
-ensure_server >/dev/null || { echo "❌ servidor OpenCode indisponível — veja $ORCHESTRA_STATE/server.log"; exec bash; }
-SID="$(ensure_session reviewer "$ORCHESTRA_REVIEWER_AGENT" "REVISOR (code review)")"
-DIR="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"; [ -n "$DIR" ] || DIR="$HOME"
-exec "$OPENCODE" attach "$OC_URL" --session "$SID" --dir "$DIR"
+exec "$ORCHESTRA_HOME/agents/attach-worker.sh" reviewer

@@ -75,6 +75,13 @@ fi
 [ "$miss" = 1 ] && { c_err "Resolva os itens acima e rode novamente."; exit 1; }
 c_ok "Claude Code e OpenCode presentes."
 
+# codex é OPCIONAL — só necessário se você escolher 'codex' como coder/reviewer no 'orchestra up'.
+if have codex || [ -x "$HOME/.local/bin/codex" ]; then
+  c_ok "Codex presente (opcional) — disponível como coder/reviewer."
+else
+  c_warn "Codex ausente (opcional). Instale se quiser usá-lo como worker: https://developers.openai.com/codex/cli"
+fi
+
 # resolve onde instalar o CLI (diretório já no PATH, sempre que possível)
 [ -n "$BIN_DIR" ] || BIN_DIR="$(pick_bindir)"
 mkdir -p "$BIN_DIR"
@@ -104,8 +111,12 @@ else install_zellij && c_ok "zellij instalado em $BIN_DIR"; fi
 # 3) baixa/atualiza o repositório
 c_say "Instalando Orchestra Agents em $INSTALL_DIR ..."
 if [ -n "${ORCHESTRA_LOCAL_SRC:-}" ]; then
-  # modo dev: instala a partir de uma cópia local
-  mkdir -p "$INSTALL_DIR"; cp -r "$ORCHESTRA_LOCAL_SRC/." "$INSTALL_DIR/"
+  # modo dev: instala a partir de uma cópia local.
+  # exclui .git (objetos read-only quebram a re-cópia e não são necessários em runtime)
+  # e caches; recria o destino do zero para evitar conflitos de sobrescrita.
+  rm -rf "$INSTALL_DIR"; mkdir -p "$INSTALL_DIR"
+  ( cd "$ORCHESTRA_LOCAL_SRC" && tar --exclude='./.git' --exclude='*/__pycache__' --exclude='*.pyc' -cf - . ) \
+    | ( cd "$INSTALL_DIR" && tar -xf - )
 elif [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" fetch --depth 1 origin "$REPO_BRANCH" && git -C "$INSTALL_DIR" reset --hard "origin/$REPO_BRANCH"
 else

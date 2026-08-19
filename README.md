@@ -6,29 +6,30 @@
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/orcioly/orchestra-agents/pulls)
 
-Um **orquestrador de IA** para o terminal: o **Claude Code** atua como **líder (maestro)** e coordena dois **workers do OpenCode** — um **CODER** (executor) e um **REVISOR** (code review) — cada um rodando na **TUI real do OpenCode**, lado a lado, dentro do **zellij**.
+Um **orquestrador de IA** para o terminal: o **Claude Code** atua como **líder (maestro)** e coordena dois **workers** — um **CODER** (executor) e um **REVISOR** (code review) — cada um rodando como **TUI real**, lado a lado, dentro do **zellij**. Para cada papel você escolhe o backend: **OpenCode** ou **Codex**.
 
-O líder despacha tarefas de forma **assíncrona** (não bloqueia, não fica gastando token esperando) e os workers trabalham em paralelo, com tudo visível ao vivo.
+O líder despacha tarefas de forma **assíncrona** (não bloqueia, não fica gastando token esperando) e os workers trabalham em paralelo, com tudo visível ao vivo. Trocar o backend não muda nada no seu fluxo — os comandos são idênticos.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │             LÍDER (Claude Code) — você orquestra            │
 ├──────────────────────────────┬──────────────────────────────┤
-│  CODER (OpenCode TUI)        │  REVISOR (OpenCode TUI)      │
-│  agente: build               │  agente: reviewer (read-only)│
+│  CODER                       │  REVISOR                     │
+│  backend: opencode | codex   │  backend: opencode | codex   │
 └──────────────────────────────┴──────────────────────────────┘
-        zellij + servidor OpenCode compartilhado (:4096)
+   zellij + servidor OpenCode (:4096) e/ou Codex app-server
 ```
+
+Ao rodar `orchestra up`, o Orchestra **pergunta** qual backend usar em cada papel (a última escolha vira o padrão). Dá para pré-definir via env `ORCHESTRA_CODER` / `ORCHESTRA_REVIEWER` (útil em CI).
 
 ---
 
 ## ✨ Como funciona
 
-Orchestra usa a arquitetura **cliente/servidor** do OpenCode:
+Cada papel roda como **TUI real** attachada a um **servidor compartilhado**, e o líder injeta tarefas de forma **assíncrona** — igual para os dois backends:
 
-- **`opencode serve`** sobe um servidor headless compartilhado (porta `4096`).
-- Cada worker é uma **TUI real** attachada a uma sessão: `opencode attach <url> --session <id>`.
-- O líder injeta tarefas via API **assíncrona** (`POST /session/:id/prompt_async`, HTTP 204 instantâneo) — o worker processa em background e renderiza ao vivo na própria TUI.
+- **OpenCode:** `opencode serve` sobe um servidor headless (porta `4096`); o worker é `opencode attach <url> --session <id>`; o líder despacha via `POST /session/:id/prompt_async`.
+- **Codex:** `codex app-server --listen unix://<sock>` sobe o servidor; o worker é `codex --remote unix://<sock> resume <thread>` (mesmo thread → as tarefas do líder aparecem ao vivo na TUI); o líder despacha via JSON-RPC (`thread/start`/`turn/start`).
 - Resultados são lidos via `orchestra result <papel> --wait` (bloqueante, eficiente — o líder encadeia automaticamente) ou `orchestra result <papel>` (sob demanda, não-bloqueante).
 
 ---
@@ -42,10 +43,12 @@ Você precisa ter, **já instalados e configurados**:
 | **Claude Code** | <https://docs.claude.com/claude-code> |
 | **OpenCode** (autenticado, com um modelo configurado) | <https://opencode.ai> |
 | `git`, `curl`, `python3` | já vêm na maioria das distros |
+| **Codex CLI** (autenticado) — *opcional* | <https://developers.openai.com/codex/cli> |
 
 > O **zellij** é instalado automaticamente pelo instalador se você ainda não tiver.
+> O **Codex** só é necessário se você escolher `codex` como coder/reviewer; caso contrário, ignore-o.
 
-O OpenCode precisa de um agente **`reviewer`** (read-only). Veja [`config/opencode.reviewer.jsonc`](config/opencode.reviewer.jsonc) — o instalador avisa se ele estiver faltando.
+O OpenCode precisa de um agente **`reviewer`** (read-only). Veja [`config/opencode.reviewer.jsonc`](config/opencode.reviewer.jsonc) — o instalador avisa se ele estiver faltando. (No backend Codex, o papel de revisor read-only é aplicado automaticamente via sandbox `read-only`.)
 
 ---
 
@@ -73,10 +76,21 @@ São só **dois passos** no dia a dia:
 
 ```bash
 cd ~/meu-projeto   # qualquer projeto, qualquer pasta
-orchestra          # abre o zellij: LÍDER (Claude) em cima, CODER | REVISOR embaixo
+orchestra          # pergunta o backend de cada papel e abre o zellij:
+                   # LÍDER (Claude) em cima, CODER | REVISOR embaixo
+```
+
+Ao subir, o Orchestra pergunta o backend de cada papel (Enter aceita o padrão / última escolha):
+
+```
+🎛️  Escolha os workers deste time:
+  coder     [1] opencode  [2] codex  (padrão: opencode) > 2
+  reviewer  [1] opencode  [2] codex  (padrão: opencode) > 
+    coder=codex · reviewer=opencode
 ```
 
 > `orchestra` sozinho já entra (equivale a `orchestra up` no diretório atual).
+> Para pular a pergunta (CI/scripts): `ORCHESTRA_CODER=codex ORCHESTRA_REVIEWER=opencode orchestra up`.
 
 ### Modo natural (recomendado)
 
@@ -113,8 +127,8 @@ orchestra down          # encerra o servidor
 | `orchestra result <papel>` | Mostra a última resposta do worker (não-bloqueante) |
 | `orchestra result <papel> --wait [s]` | Bloqueia até resposta completa (padrão: 300s) |
 | `orchestra await <papel> [s]` | Alias de `result --wait` |
-| `orchestra status` | Estado do servidor e das sessões |
-| `orchestra down` | Encerra o servidor OpenCode |
+| `orchestra status` | Estado dos servidores, backend e sessões/threads de cada papel |
+| `orchestra down` | Encerra os servidores (OpenCode e/ou Codex app-server) |
 | `orchestra uninstall` | Remove o Orchestra Agents por completo |
 | `orchestra version` | Versão |
 
@@ -189,9 +203,10 @@ Resumo: o essencial está ok, com 1 aviso(s).
 O Orchestra **usa os modelos que você já tem configurados** — não força nenhum:
 
 - **Workers (OpenCode):** por padrão **nenhum modelo é enviado**, então o OpenCode usa o **modelo default da sua config** (`~/.config/opencode/opencode.jsonc`) ou o do próprio agente. Quer forçar um modelo específico? Defina `ORCHESTRA_MODEL="provider/modelo"`.
+- **Workers (Codex):** por padrão usa o **modelo default do Codex**. Para forçar, defina `ORCHESTRA_CODEX_MODEL="nome-do-modelo"`.
 - **Líder (Claude Code):** sobe com `claude` **sem `--model`**, então usa o **modelo que você configurou no Claude Code**.
 
-Resumo: configurou no OpenCode/Claude → é o que o Orchestra usa.
+Resumo: configurou no OpenCode/Codex/Claude → é o que o Orchestra usa.
 
 ### Variáveis
 
@@ -199,18 +214,24 @@ Por ambiente ou em `~/.config/orchestra-agents/config` (formato shell):
 
 | Variável | Padrão | Descrição |
 |----------|--------|-----------|
-| `ORCHESTRA_MODEL` | *(vazio)* | **Override opcional** do modelo dos workers (`provider/modelo`). Vazio = usa o default do OpenCode |
-| `ORCHESTRA_CODER_AGENT` | `build` | Agente do CODER |
-| `ORCHESTRA_REVIEWER_AGENT` | `reviewer` | Agente do REVISOR |
+| `ORCHESTRA_CODER` | *(pergunta)* | Backend do CODER: `opencode` \| `codex`. Definido = pula a pergunta no `up` |
+| `ORCHESTRA_REVIEWER` | *(pergunta)* | Backend do REVISOR: `opencode` \| `codex`. Definido = pula a pergunta no `up` |
+| `ORCHESTRA_MODEL` | *(vazio)* | **Override opcional** do modelo dos workers **OpenCode** (`provider/modelo`). Vazio = default do OpenCode |
+| `ORCHESTRA_CODEX_MODEL` | *(vazio)* | **Override opcional** do modelo dos workers **Codex** (nome do modelo). Vazio = default do Codex |
+| `ORCHESTRA_CODER_AGENT` | `build` | Agente do CODER (só backend OpenCode) |
+| `ORCHESTRA_REVIEWER_AGENT` | `reviewer` | Agente do REVISOR (só backend OpenCode) |
 | `ORCHESTRA_PORT` | `4096` | Porta do servidor OpenCode |
-| `ORCHESTRA_HOST` | `127.0.0.1` | Host do servidor |
+| `ORCHESTRA_HOST` | `127.0.0.1` | Host do servidor OpenCode |
+| `ORCHESTRA_CODEX_SOCK` | `$ORCHESTRA_STATE/codex.sock` | Socket Unix do Codex app-server |
 | `ORCHESTRA_HOME` | `~/.orchestra-agents` | Diretório de instalação |
-| `ORCHESTRA_STATE` | `~/.local/state/orchestra-agents` | Estado de runtime (ids de sessão, logs) |
+| `ORCHESTRA_STATE` | `~/.local/state/orchestra-agents` | Estado de runtime (sessões/threads, backend, logs) |
 
 Exemplo `~/.config/orchestra-agents/config` (só se quiser forçar algo):
 
 ```sh
-ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # opcional — força este modelo nos workers
+ORCHESTRA_CODER="codex"                         # opcional — fixa o backend do coder
+ORCHESTRA_REVIEWER="opencode"                   # opcional — fixa o backend do reviewer
+ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # opcional — força este modelo nos workers OpenCode
 ORCHESTRA_REVIEWER_AGENT="reviewer"
 ```
 
@@ -234,7 +255,7 @@ orchestra uninstall
 curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
 ```
 
-> zellij, Claude Code e OpenCode **não** são removidos — são ferramentas gerais que você pode usar fora do Orchestra.
+> zellij, Claude Code, OpenCode e Codex **não** são removidos — são ferramentas gerais que você pode usar fora do Orchestra.
 
 ---
 
@@ -245,12 +266,14 @@ orchestra-agents/
 ├── install.sh                   # instalador (curl | bash)
 ├── uninstall.sh                 # desinstalador
 ├── bin/orchestra                # CLI
-├── lib/core.sh                  # núcleo: servidor, sessões, despacho async, uninstall
+├── lib/core.sh                  # núcleo: servidores, sessões/threads, despacho async, backends
+├── lib/codex_client.py          # cliente JSON-RPC do Codex app-server (thread/turn)
 ├── agents/
 │   ├── leader.sh                # painel do LÍDER (Claude)
 │   ├── leader-prompt.md         # instruções de orquestração (modo natural)
-│   ├── attach-coder.sh          # painel CODER (OpenCode TUI)
-│   └── attach-reviewer.sh       # painel REVISOR (OpenCode TUI)
+│   ├── attach-worker.sh         # painel CODER/REVISOR (backend-aware: OpenCode | Codex)
+│   ├── attach-coder.sh          # compat shim → attach-worker.sh coder
+│   └── attach-reviewer.sh       # compat shim → attach-worker.sh reviewer
 ├── layouts/
 │   ├── team.kdl                 # zellij: LÍDER + CODER + REVISOR
 │   └── solo.kdl                 # zellij: só o LÍDER

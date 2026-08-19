@@ -9,11 +9,13 @@ VERSION="0.1.0"
 
 usage() {
   cat <<'EOF'
-🎼 Orchestra Agents — orquestrador de IA (Claude líder + workers OpenCode)
+🎼 Orchestra Agents — orquestrador de IA (Claude líder + workers OpenCode/Codex)
 
 uso:
   orchestra up [dir]            sobe o time no zellij (LÍDER + CODER + REVISOR)
-                               no projeto 'dir' (padrão: diretório atual)
+                               no projeto 'dir' (padrão: diretório atual).
+                               PERGUNTA qual backend usar em cada papel: opencode | codex
+                               (env ORCHESTRA_CODER / ORCHESTRA_REVIEWER sobrescreve p/ CI)
   orchestra send <papel> <txt> despacha tarefa de forma ASSÍNCRONA (não bloqueia)
                                papel: coder | reviewer
   orchestra result <papel>     mostra a última resposta do worker (não-bloqueante)
@@ -51,10 +53,39 @@ case "$cmd" in
     echo "$proj" >"$ORCHESTRA_STATE/project"
     echo "🎼 subindo Orchestra no projeto: $proj"
     ensure_reviewer_agent   # auto-configura o agente revisor no OpenCode (idempotente)
-    ensure_server || { echo "❌ servidor OpenCode não subiu — veja $ORCHESTRA_STATE/server.log"; exit 1; }
-    # sessões FRESCAS a cada 'up' → começa com contexto limpo
-    ensure_session coder    "$ORCHESTRA_CODER_AGENT"    "CODER (executor)"    fresh >/dev/null
-    ensure_session reviewer "$ORCHESTRA_REVIEWER_AGENT" "REVISOR (code review)" fresh >/dev/null
+
+    # escolha do backend de cada papel (opencode|codex) — menu VISUAL (setas).
+    # env ORCHESTRA_CODER/REVIEWER sobrescreve; sem tty cai no default.
+    read -r coder_backend reviewer_backend <<<"$(select_backends)"
+    printf '%s' "$coder_backend"    >"$ORCHESTRA_STATE/coder.backend"
+    printf '%s' "$reviewer_backend" >"$ORCHESTRA_STATE/reviewer.backend"
+    echo "  ✔ coder=$coder_backend · reviewer=$reviewer_backend"
+
+    # valida disponibilidade do codex se algum papel o usar
+    if [ "$coder_backend" = codex ] || [ "$reviewer_backend" = codex ]; then
+      if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/codex" ]; then
+        echo "❌ codex não encontrado no PATH — instale (https://developers.openai.com/codex/cli) ou escolha opencode"; exit 1
+      fi
+    fi
+
+    # sobe os servidores necessários
+    if [ "$coder_backend" = opencode ] || [ "$reviewer_backend" = opencode ]; then
+      printf '  ⏳ subindo servidor OpenCode...'; ensure_server \
+        && echo ' ok' || { echo; echo "❌ servidor OpenCode não subiu — veja $ORCHESTRA_STATE/server.log"; exit 1; }
+    fi
+    if [ "$coder_backend" = codex ] || [ "$reviewer_backend" = codex ]; then
+      printf '  ⏳ subindo Codex app-server...'; ensure_codex_server \
+        && echo ' ok' || { echo; echo "❌ codex app-server não subiu — veja $ORCHESTRA_STATE/codex-server.log"; exit 1; }
+    fi
+
+    # workers FRESCOS a cada 'up' → começa com contexto limpo
+    printf '  ⏳ preparando CODER (%s)...' "$coder_backend"
+    ensure_worker coder "CODER (executor)" fresh >/dev/null \
+      && echo ' ok' || { echo; echo "❌ falha ao preparar o coder — veja $ORCHESTRA_STATE/codex-server.log"; exit 1; }
+    printf '  ⏳ preparando REVISOR (%s)...' "$reviewer_backend"
+    ensure_worker reviewer "REVISOR (code review)" fresh >/dev/null \
+      && echo ' ok' || { echo; echo "❌ falha ao preparar o reviewer — veja $ORCHESTRA_STATE/codex-server.log"; exit 1; }
+    echo "  🎬 abrindo o zellij..."
     exec zellij --layout "$ORCHESTRA_HOME/layouts/team.kdl"
     ;;
   send)     dispatch "$@" ;;
