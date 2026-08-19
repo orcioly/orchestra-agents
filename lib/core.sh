@@ -1,43 +1,123 @@
 #!/usr/bin/env bash
-# Orchestra Agents — núcleo compartilhado (servidor OpenCode, sessões, despacho async)
+# Orchestra Agents — núcleo compartilhado.
+#
+# Modelo: um TIME de N agentes (líder + workers) rodando como TUIs LOCAIS em
+# painéis do zellij. O líder despacha tarefas INJETANDO texto no painel do worker
+# (via lib/mux.sh) e recebe a resposta quando o worker executa 'orchestra done'.
+#
+# Não há servidor headless nem id de sessão guardado: é por isso que /clear, /new,
+# resize e mover painel deixaram de quebrar o despacho.
+#
 # Não executar diretamente; é "sourced" pelo CLI e pelos scripts de painel.
 
 # ----- Configuração (sobrescrevível por env ou ~/.config/orchestra-agents/config) -----
 ORCHESTRA_HOME="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
 ORCHESTRA_STATE="${ORCHESTRA_STATE:-$HOME/.local/state/orchestra-agents}"
-ORCHESTRA_PORT="${ORCHESTRA_PORT:-4096}"
-ORCHESTRA_HOST="${ORCHESTRA_HOST:-127.0.0.1}"
-# modelo: VAZIO por padrão => usa o modelo já configurado/default no OpenCode.
-# defina ORCHESTRA_MODEL="provider/modelo" só se quiser FORÇAR um modelo específico.
-ORCHESTRA_MODEL="${ORCHESTRA_MODEL:-}"
-ORCHESTRA_CODER_AGENT="${ORCHESTRA_CODER_AGENT:-build}"
-ORCHESTRA_REVIEWER_AGENT="${ORCHESTRA_REVIEWER_AGENT:-reviewer}"
 
-# ----- Backend por papel (opencode | codex) -----
-# escolhido interativamente no 'orchestra up'; env sobrescreve (útil p/ CI/scripts).
-ORCHESTRA_CODER="${ORCHESTRA_CODER:-}"        # opencode|codex (vazio => pergunta/último)
-ORCHESTRA_REVIEWER="${ORCHESTRA_REVIEWER:-}"  # opencode|codex (vazio => pergunta/último)
-# modelo opcional SÓ para o backend codex (nome do modelo, ex.: gpt-5-codex).
-# vazio => usa o default do Codex. Não confundir com ORCHESTRA_MODEL (OpenCode).
-ORCHESTRA_CODEX_MODEL="${ORCHESTRA_CODEX_MODEL:-}"
+# modelos: VAZIOS por padrão => cada CLI usa o modelo que o usuário já configurou.
+ORCHESTRA_MODEL="${ORCHESTRA_MODEL:-}"                 # OpenCode (provider/modelo)
+ORCHESTRA_CODEX_MODEL="${ORCHESTRA_CODEX_MODEL:-}"     # Codex (nome do modelo)
+ORCHESTRA_MODEL_CLAUDE="${ORCHESTRA_MODEL_CLAUDE:-}"   # Claude Code
+
+# composição do time sem TTY (CI/scripts): "leader=claude,coder=opencode,reviewer=codex"
+ORCHESTRA_TEAM="${ORCHESTRA_TEAM:-}"
+# aliases herdados (continuam funcionando)
+ORCHESTRA_CODER="${ORCHESTRA_CODER:-}"
+ORCHESTRA_REVIEWER="${ORCHESTRA_REVIEWER:-}"
+
+# timeout padrão do 'await' (segundos)
+ORCHESTRA_TIMEOUT="${ORCHESTRA_TIMEOUT:-300}"
 
 # carrega config do usuário, se existir
 [ -f "$HOME/.config/orchestra-agents/config" ] && . "$HOME/.config/orchestra-agents/config"
 
-OC_URL="http://${ORCHESTRA_HOST}:${ORCHESTRA_PORT}"
 mkdir -p "$ORCHESTRA_STATE"
 
-# socket Unix do codex app-server compartilhado (análogo ao OC_URL do OpenCode).
-# caminho curto de propósito (limite SUN_LEN ~108 do AF_UNIX).
-CODEX_SOCK="${ORCHESTRA_CODEX_SOCK:-$ORCHESTRA_STATE/codex.sock}"
+# ----- Projeto corrente e diretórios de runtime -----
+# O runtime mora DENTRO do projeto (.orchestra/run) de propósito: é o que permite
+# ao worker codex, rodando com sandbox 'workspace-write', escrever a resposta.
+ORCHESTRA_PROJECT="${ORCHESTRA_PROJECT:-}"
+if [ -z "$ORCHESTRA_PROJECT" ]; then
+  ORCHESTRA_PROJECT="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"
+fi
+[ -n "$ORCHESTRA_PROJECT" ] || ORCHESTRA_PROJECT="$PWD"
+ORCHESTRA_DIR="$ORCHESTRA_PROJECT/.orchestra"
+ORCHESTRA_RUN_DIR="$ORCHESTRA_DIR/run"
 
-_model_provider() { echo "${ORCHESTRA_MODEL%%/*}"; }
-_model_id()       { echo "${ORCHESTRA_MODEL#*/}"; }
+# shellcheck source=/dev/null
+. "$ORCHESTRA_HOME/lib/mux.sh"
+# shellcheck source=/dev/null
+. "$ORCHESTRA_HOME/lib/team.sh"
+# shellcheck source=/dev/null
+. "$ORCHESTRA_HOME/lib/layout.sh"
 
-# lê o modelo default já configurado no OpenCode (~/.config/opencode/opencode.jsonc)
+# ----- Resolução dos binários dos backends -----
+_resolve_opencode() {
+  if command -v opencode >/dev/null 2>&1; then command -v opencode; return; fi
+  [ -x "$HOME/.opencode/bin/opencode" ] && { echo "$HOME/.opencode/bin/opencode"; return; }
+  echo opencode
+}
+_resolve_codex() {
+  if command -v codex >/dev/null 2>&1; then command -v codex; return; fi
+  [ -x "$HOME/.local/bin/codex" ] && { echo "$HOME/.local/bin/codex"; return; }
+  echo codex
+}
+OPENCODE="$(_resolve_opencode)"
+CODEX="$(_resolve_codex)"
+
+backend_available() { # $1 backend
+  case "$1" in
+    claude)   command -v claude >/dev/null 2>&1 ;;
+    opencode) command -v opencode >/dev/null 2>&1 || [ -x "$HOME/.opencode/bin/opencode" ] ;;
+    codex)    command -v codex   >/dev/null 2>&1 || [ -x "$HOME/.local/bin/codex" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+backend_url() { # $1 backend  → onde instalar
+  case "$1" in
+    claude)   echo "https://docs.claude.com/claude-code" ;;
+    opencode) echo "https://opencode.ai" ;;
+    codex)    echo "https://developers.openai.com/codex/cli" ;;
+  esac
+}
+
+# Sandbox do Codex. Todos os papéis precisam escrever em .orchestra/run/ para
+# fechar o ciclo com 'orchestra done', então usamos workspace-write mesmo no
+# reviewer — a disciplina read-only dele é garantida pelo prompt de papel.
+codex_sandbox_for() { # $1 role
+  echo "${ORCHESTRA_CODEX_SANDBOX:-workspace-write}"
+}
+
+# ----- OpenCode: config e agentes -----
+# resolve o config do OpenCode respeitando OPENCODE_CONFIG e XDG_CONFIG_HOME
+oc_config_path() {
+  if [ -n "${OPENCODE_CONFIG:-}" ]; then echo "$OPENCODE_CONFIG"; return; fi
+  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  [ -f "$dir/opencode.jsonc" ] && { echo "$dir/opencode.jsonc"; return; }
+  [ -f "$dir/opencode.json" ]  && { echo "$dir/opencode.json";  return; }
+  echo "$dir/opencode.jsonc"
+}
+
+# garante o agente 'reviewer' no config do OpenCode — automático e idempotente.
+ensure_reviewer_agent() {
+  local script="$ORCHESTRA_HOME/config/merge_reviewer.py"
+  local tmpl="$ORCHESTRA_HOME/config/opencode.reviewer.jsonc"
+  [ -f "$script" ] && [ -f "$tmpl" ] && command -v python3 >/dev/null 2>&1 || return 0
+  python3 "$script" "$(oc_config_path)" "$tmpl" >/dev/null 2>&1 || true
+}
+
+# existe um agente com esse nome no config do OpenCode?
+_opencode_has_agent() { # $1 nome
+  local cfg; cfg="$(oc_config_path)"
+  [ -f "$cfg" ] || return 1
+  grep -q "\"$1\"" "$cfg" 2>/dev/null
+}
+
+# lê o modelo default já configurado no OpenCode
 _detect_model() {
   local cfg
-  for cfg in "$HOME/.config/opencode/opencode.jsonc" "$HOME/.config/opencode/opencode.json"; do
+  for cfg in "$(oc_config_path)"; do
     [ -f "$cfg" ] || continue
     python3 - "$cfg" <<'PY'
 import sys, re, json
@@ -54,589 +134,635 @@ PY
   return 1
 }
 
-# modelo efetivo para exibir/diagnosticar: o forçado, senão o default do OpenCode
 _effective_model() {
   if [ -n "$ORCHESTRA_MODEL" ]; then echo "$ORCHESTRA_MODEL"; else _detect_model 2>/dev/null || true; fi
 }
 
-# localiza o binário do opencode
-_resolve_opencode() {
-  if command -v opencode >/dev/null 2>&1; then command -v opencode; return; fi
-  [ -x "$HOME/.opencode/bin/opencode" ] && { echo "$HOME/.opencode/bin/opencode"; return; }
-  echo opencode
-}
-OPENCODE="$(_resolve_opencode)"
-
-# localiza o binário do codex
-_resolve_codex() {
-  if command -v codex >/dev/null 2>&1; then command -v codex; return; fi
-  [ -x "$HOME/.local/bin/codex" ] && { echo "$HOME/.local/bin/codex"; return; }
-  echo codex
-}
-CODEX="$(_resolve_codex)"
-CODEX_CLIENT="$ORCHESTRA_HOME/lib/codex_client.py"
-
-# backend efetivo de um papel (opencode|codex). default: opencode.
-_role_backend() { # $1 role
-  local b; b="$(cat "$ORCHESTRA_STATE/$1.backend" 2>/dev/null)"
-  case "$b" in codex) echo codex ;; *) echo opencode ;; esac
-}
-# há algum papel usando codex? (p/ decidir se sobe o app-server)
-_any_codex() {
-  local r; for r in coder reviewer; do [ "$(_role_backend "$r")" = codex ] && return 0; done; return 1
-}
-# instruções (system prompt) por papel para o worker codex
-_codex_instructions() { # $1 role
-  case "$1" in
-    coder) echo "Você é o CODER (executor) do Orchestra. Implemente o que for pedido no projeto atual: escreva/edite código, crie testes e faça funcionar. Seja objetivo e conclua a tarefa." ;;
-    reviewer) echo "Você é o REVISOR (read-only) do Orchestra. Analise o diff/alterações. Liste bugs, regressões, riscos de segurança/performance e testes faltando. NÃO edite arquivos. Termine SEMPRE com 'VEREDITO: APROVADO' ou 'VEREDITO: REPROVADO' seguido dos itens." ;;
-  esac
-}
-_codex_sandbox() { # $1 role
-  # sem user namespaces, o sandbox real do Codex não funciona → roda sem sandbox
-  if [ -f "$ORCHESTRA_STATE/codex.nosandbox" ]; then echo danger-full-access; return; fi
-  case "$1" in coder) echo workspace-write ;; reviewer) echo read-only ;; esac
+# ---------------------------------------------------------------------------
+# Runtime dos agentes
+# ---------------------------------------------------------------------------
+# printf '%-Ns' do bash conta BYTES: um acento (LÍDER) encolhe a coluna em 1 e
+# desalinha a tabela inteira. Este padding conta CARACTERES.
+_pad() { # $1 texto  $2 largura
+  local t="$1" n="${2:-0}" i=${#1}
+  printf '%s' "$t"
+  while [ "$i" -lt "$n" ]; do printf ' '; i=$((i+1)); done
 }
 
-oc_up() { curl -s --max-time 2 "$OC_URL/api/session" >/dev/null 2>&1; }
+# "a b c" -> "a, b, c" — toda lista mostrada ao usuário passa por aqui
+_human_list() { printf '%s' "$1" | tr -s ' ' '\n' | sed '/^$/d' | paste -sd',' - | sed 's/,/, /g'; }
 
-# resolve o config do OpenCode respeitando OPENCODE_CONFIG e XDG_CONFIG_HOME
-oc_config_path() {
-  if [ -n "${OPENCODE_CONFIG:-}" ]; then echo "$OPENCODE_CONFIG"; return; fi
-  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
-  [ -f "$dir/opencode.jsonc" ] && { echo "$dir/opencode.jsonc"; return; }
-  [ -f "$dir/opencode.json" ]  && { echo "$dir/opencode.json";  return; }
-  echo "$dir/opencode.jsonc"
+# corta preservando a largura visual (conta caracteres, não bytes)
+_ellipsis() { # $1 texto  $2 largura
+  local t="$1" n="${2:-0}"
+  if [ "${#t}" -gt "$n" ]; then printf '%s…' "${t:0:$((n-1))}"; else printf '%s' "$t"; fi
 }
 
-# garante o agente 'reviewer' no config do OpenCode — automático e idempotente.
-# Roda ANTES de subir o servidor p/ que o OpenCode recém-iniciado já leia o agente.
-ensure_reviewer_agent() {
-  local script="$ORCHESTRA_HOME/config/merge_reviewer.py"
-  local tmpl="$ORCHESTRA_HOME/config/opencode.reviewer.jsonc"
-  [ -f "$script" ] && [ -f "$tmpl" ] && command -v python3 >/dev/null 2>&1 || return 0
-  python3 "$script" "$(oc_config_path)" "$tmpl" >/dev/null 2>&1 || true
-}
+_run_file() { echo "$ORCHESTRA_RUN_DIR/$1.$2"; }   # $1 agente  $2 sufixo
 
-# ----- Codex app-server compartilhado (análogo ao 'opencode serve') -----
-# vivo se o socket existe e responde ao 'initialize' (via WebSocket, no cliente).
-codex_up() {
-  [ -S "$CODEX_SOCK" ] || return 1
-  python3 "$CODEX_CLIENT" --sock "$CODEX_SOCK" ping >/dev/null 2>&1
-}
+_new_task_id() { printf 'T%s%04d' "$(date +%s)" "$((RANDOM % 10000))"; }
 
-# o sandbox do Codex no Linux usa bubblewrap + user namespaces. Em máquinas onde
-# criar user namespaces é bloqueado (containers/kernels endurecidos), o app-server
-# NÃO sobe. Detectamos isso e, se for o caso, rodamos SEM sandbox (como o OpenCode).
-_codex_sandbox_available() {
-  command -v bwrap >/dev/null 2>&1 || return 1
-  bwrap --ro-bind / / --dev /dev true >/dev/null 2>&1
-}
-
-ensure_codex_server() {
-  codex_up && return 0
-  rm -f "$CODEX_SOCK" 2>/dev/null || true
-  local extra=()
-  if _codex_sandbox_available; then
-    rm -f "$ORCHESTRA_STATE/codex.nosandbox" 2>/dev/null || true
-  else
-    printf '1' >"$ORCHESTRA_STATE/codex.nosandbox"
-    extra=(-c sandbox_mode=danger-full-access)
-    echo "⚠️  user namespaces indisponíveis — Codex rodará SEM sandbox (como o OpenCode)." >&2
+# garante que o agente existe, com mensagem útil quando não existe
+_require_agent() { # $1 nome
+  team_ensure
+  if [ -z "${1:-}" ]; then
+    echo "❌ falta o nome do agente. Agentes: $(team_names | tr '\n' ' ')" >&2; return 1
   fi
-  setsid "$CODEX" app-server "${extra[@]}" --listen "unix://$CODEX_SOCK" \
-    >"$ORCHESTRA_STATE/codex-server.log" 2>&1 </dev/null &
-  for _ in $(seq 1 30); do codex_up && return 0; sleep 1; done
-  return 1
-}
-
-ensure_server() {
-  oc_up && return 0
-  # destaca o servidor de forma portátil: setsid no Linux (idiomático),
-  # nohup+disown no macOS/BSD, onde setsid não existe.
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$OPENCODE" serve --port "$ORCHESTRA_PORT" --hostname "$ORCHESTRA_HOST" \
-      >"$ORCHESTRA_STATE/server.log" 2>&1 </dev/null &
-  else
-    nohup "$OPENCODE" serve --port "$ORCHESTRA_PORT" --hostname "$ORCHESTRA_HOST" \
-      >"$ORCHESTRA_STATE/server.log" 2>&1 </dev/null &
-    disown 2>/dev/null || true
-  fi
-  for _ in $(seq 1 30); do oc_up && return 0; sleep 1; done
-  return 1
-}
-
-_create_session() { # $1 agent  $2 title  -> ses id
-  # fixa o diretório do projeto na sessão (se definido), p/ o worker operar no repo certo
-  local proj loc=""
-  proj="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"
-  [ -n "$proj" ] && loc=",\"location\":{\"directory\":\"$proj\"}"
-  curl -s -X POST "$OC_URL/api/session" -H 'Content-Type: application/json' \
-    -d "{\"agent\":\"$1\",\"title\":\"$2\"$loc}" \
-    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])"
-}
-
-_session_exists() { curl -s "$OC_URL/api/session" 2>/dev/null | grep -q "$1"; }
-
-_session_msgcount() { # $1 sid
-  curl -s "$OC_URL/session/$1/message" 2>/dev/null | python3 -c "
-import sys,json
-try:
-    d=json.load(sys.stdin); d=d if isinstance(d,list) else d.get('data',[])
-    print(len(d))
-except Exception:
-    print(0)"
-}
-
-# garante a sessão de um papel. 4º arg 'fresh' força sessão NOVA e vazia
-# (usado pelo 'up' para começar cada subida com contexto limpo).
-ensure_session() { # $1 role  $2 agent  $3 title  [fresh]
-  local role="$1" agent="$2" title="$3" fresh="${4:-}"
-  local f="$ORCHESTRA_STATE/$role.session" sid=""
-  [ -s "$f" ] && sid="$(cat "$f")"
-  if [ -n "$fresh" ] || [ -z "$sid" ] || ! _session_exists "$sid"; then
-    sid="$(_create_session "$agent" "$title")"
-    printf '%s' "$sid" >"$f"
-  fi
-  echo "$sid"
-}
-
-# garante o THREAD do codex para um papel (análogo à sessão do OpenCode).
-# 2º arg 'fresh' força thread NOVO (usado pelo 'up' p/ contexto limpo).
-ensure_codex_thread() { # $1 role  [fresh]
-  local role="$1" fresh="${2:-}" f tid proj model_arg=()
-  f="$ORCHESTRA_STATE/$role.codex.thread"
-  [ -s "$f" ] && tid="$(cat "$f")"
-  if [ -z "$fresh" ] && [ -n "${tid:-}" ]; then echo "$tid"; return 0; fi
-  proj="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"; [ -n "$proj" ] || proj="$PWD"
-  [ -n "$ORCHESTRA_CODEX_MODEL" ] && model_arg=(--model "$ORCHESTRA_CODEX_MODEL")
-  local timeout_bin=""; command -v timeout >/dev/null 2>&1 && timeout_bin="timeout 120"
-  tid="$($timeout_bin python3 "$CODEX_CLIENT" --sock "$CODEX_SOCK" start-thread \
-        --cwd "$proj" \
-        --sandbox "$(_codex_sandbox "$role")" \
-        --approval never \
-        --instructions "$(_codex_instructions "$role")" \
-        "${model_arg[@]}" 2>>"$ORCHESTRA_STATE/codex-server.log")"
-  [ -n "$tid" ] || return 1
-  printf '%s' "$tid" >"$f"
-  echo "$tid"
-}
-
-# garante o worker de um papel conforme o backend escolhido (opencode|codex).
-# usado pelo 'up' e pelos painéis. 4º/2º arg 'fresh' força recomeço limpo.
-ensure_worker() { # $1 role  $2 title  [fresh]
-  local role="$1" title="$2" fresh="${3:-}" agent
-  if [ "$(_role_backend "$role")" = codex ]; then
-    ensure_codex_server >/dev/null || { echo "❌ codex app-server não subiu — veja $ORCHESTRA_STATE/codex-server.log" >&2; return 1; }
-    ensure_codex_thread "$role" "$fresh"
-  else
-    case "$role" in coder) agent="$ORCHESTRA_CODER_AGENT" ;; reviewer) agent="$ORCHESTRA_REVIEWER_AGENT" ;; esac
-    ensure_session "$role" "$agent" "$title" "$fresh"
+  if ! team_exists "$1"; then
+    echo "❌ agente '$1' não existe. Agentes: $(team_names | tr '\n' ' ')" >&2
+    echo "   crie com: orchestra add $1" >&2
+    return 1
   fi
 }
 
-# seletor VISUAL (setas) dos backends de coder e reviewer numa única tela.
-# desenha em /dev/tty; ecoa "coder_backend reviewer_backend" no stdout.
-# respeita env (ORCHESTRA_CODER/REVIEWER) — se AMBOS setados, não abre UI (CI).
-# sem /dev/tty (ex.: pipe/CI), cai no default (env > última escolha > opencode).
-select_backends() {
-  local ce re c0 r0
-  case "$ORCHESTRA_CODER"    in opencode|codex) ce="$ORCHESTRA_CODER" ;; *) ce="" ;; esac
-  case "$ORCHESTRA_REVIEWER" in opencode|codex) re="$ORCHESTRA_REVIEWER" ;; *) re="" ;; esac
-  if [ -n "$ce" ] && [ -n "$re" ]; then echo "$ce $re"; return 0; fi
-  c0="${ce:-$(_role_backend coder)}"; r0="${re:-$(_role_backend reviewer)}"
-  # sem terminal controlador (pipe/CI/subprocesso): não dá pra abrir /dev/tty → default.
-  if ! ( : >/dev/tty ) 2>/dev/null; then echo "$c0 $r0"; return 0; fi
-
-  local labels=("CODER  " "REVISOR") vals=("$c0" "$r0")
-  local row=0 nrows=2 key k2
-  _sb_t()  { printf "$@" >/dev/tty; }
-  _sb_toggle() { [ "${vals[$row]}" = opencode ] && vals[$row]=codex || vals[$row]=opencode; }
-  _sb_render() {
-    local i arrow oc cx
-    for i in 0 1; do
-      [ "$i" = "$row" ] && arrow='\033[1;36m▸\033[0m' || arrow=' '
-      if [ "${vals[$i]}" = opencode ]; then oc='\033[1;7;36m opencode \033[0m'; cx=' codex ';
-      else oc=' opencode '; cx='\033[1;7;35m codex \033[0m'; fi
-      _sb_t ' %b  \033[1m%s\033[0m   %b  %b\n' "$arrow" "${labels[$i]}" "$oc" "$cx"
-    done
-  }
-  _sb_t '\n\033[1m🎛️  Escolha os workers deste time\033[0m  \033[2m(↑/↓ move · ←/→ ou espaço troca · Enter confirma)\033[0m\n\n'
-  _sb_t '\033[?25l'
-  trap 'printf "\033[?25h" >/dev/tty' RETURN INT
-  _sb_render
-  while true; do
-    IFS= read -rsn1 key </dev/tty || break
-    case "$key" in
-      $'\e')
-        read -rsn2 -t 0.02 k2 </dev/tty
-        case "$k2" in
-          '[A') row=$(( (row+nrows-1)%nrows )) ;;
-          '[B') row=$(( (row+1)%nrows )) ;;
-          '[C'|'[D') _sb_toggle ;;
-        esac ;;
-      ' ') _sb_toggle ;;
-      k|K) row=$(( (row+nrows-1)%nrows )) ;;
-      j|J) row=$(( (row+1)%nrows )) ;;
-      h|H|l|L) _sb_toggle ;;
-      '') break ;;                 # Enter
-      q|Q) break ;;
-    esac
-    _sb_t '\033[%dA' "$nrows"; _sb_render
-  done
-  _sb_t '\033[?25h\n'
-  trap - RETURN INT
-  unset -f _sb_t _sb_toggle _sb_render
-  echo "${vals[0]} ${vals[1]}"
+# resolve o painel do agente, RECRIANDO-O se tiver morrido (auto-cura).
+_pane_for() { # $1 agente  → ecoa pane-id
+  local agent="$1" pane
+  pane="$(mux_pane_id "$agent" 2>/dev/null)"
+  if [ -n "$pane" ]; then echo "$pane"; return 0; fi
+  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra up'" >&2; return 1; }
+  echo "⚠️  painel de '$agent' não está aberto — recriando…" >&2
+  pane="$(mux_new_pane "$agent" "$ORCHESTRA_PROJECT")" || {
+    echo "❌ não consegui recriar o painel de '$agent'" >&2; return 1; }
+  # dá um instante para a TUI subir antes de injetar texto
+  sleep 3
+  echo "$pane"
 }
 
-# escolhe o backend de um papel: env > pergunta interativa (com último como default).
-# lê/escreve em /dev/tty para não poluir stdout (que carrega o valor escolhido).
-choose_backend() { # $1 role  -> ecoa opencode|codex
-  local role="$1" envval="" cur def ans
-  case "$role" in coder) envval="$ORCHESTRA_CODER" ;; reviewer) envval="$ORCHESTRA_REVIEWER" ;; esac
-  cur="$(_role_backend "$role")"; def="${cur:-opencode}"
-  if [ -n "$envval" ]; then
-    case "$envval" in
-      opencode|codex) echo "$envval"; return 0 ;;
-      *) printf "⚠️  valor inválido em ORCHESTRA_%s: '%s' — usando '%s'\n" "$(echo "$role" | tr a-z A-Z)" "$envval" "$def" >&2; echo "$def"; return 0 ;;
-    esac
+# ---------------------------------------------------------------------------
+# Despacho (ASSÍNCRONO): injeta a tarefa no painel do agente.
+# ---------------------------------------------------------------------------
+dispatch() { # $1 agente  $2.. texto
+  local agent="${1:-}"; shift 2>/dev/null || true
+  local text="$*" pane task payload
+  _require_agent "$agent" || return 1
+  [ -n "$text" ] || { echo "❌ tarefa vazia. uso: orchestra send $agent \"<tarefa>\"" >&2; return 1; }
+
+  pane="$(_pane_for "$agent")" || return 1
+  mkdir -p "$ORCHESTRA_RUN_DIR"
+
+  task="$(_new_task_id)"
+  printf '%s' "$task" >"$(_run_file "$agent" task)"
+  printf 'running'    >"$(_run_file "$agent" status)"
+  rm -f "$(_run_file "$agent" out)" 2>/dev/null || true
+
+  payload="$(cat <<EOF
+$text
+
+─────
+[ORCHESTRA task=$task] Ao concluir ESTA tarefa, execute no shell:
+
+    orchestra done $agent $task <<'ORCHESTRA_EOF'
+    <sua resposta final>
+    ORCHESTRA_EOF
+EOF
+)"
+
+  mux_send_text "$pane" "$payload" || { echo "❌ falha ao injetar a tarefa no painel de '$agent'" >&2; return 1; }
+  mux_enter "$pane" || { echo "❌ falha ao submeter a tarefa em '$agent'" >&2; return 1; }
+  echo "📨 tarefa $task enviada a '$agent' (painel $pane) — rodando ao vivo, sem bloquear o líder"
+}
+
+# ---------------------------------------------------------------------------
+# 'orchestra done' — chamado PELO WORKER para devolver a resposta (lê stdin).
+# ---------------------------------------------------------------------------
+done_reply() { # $1 agente  $2 task_id
+  local agent="${1:-}" task="${2:-}" cur body
+  _require_agent "$agent" || return 1
+  mkdir -p "$ORCHESTRA_RUN_DIR"
+  cur="$(cat "$(_run_file "$agent" task)" 2>/dev/null)"
+  body="$(cat)"
+  if [ -n "$task" ] && [ -n "$cur" ] && [ "$task" != "$cur" ]; then
+    echo "⚠️  task '$task' não é a tarefa corrente de '$agent' ('$cur') — resposta ignorada." >&2
+    return 1
   fi
-  # sem terminal interativo => usa o default (não trava CI/scripts)
-  if [ ! -r /dev/tty ]; then echo "$def"; return 0; fi
-  printf '  %-9s [1] opencode  [2] codex  (padrão: %s) > ' "$role" "$def" >/dev/tty
-  read -r ans </dev/tty || ans=""
-  case "$ans" in
-    1|opencode|oc|o) echo opencode ;;
-    2|codex|cx|c)    echo codex ;;
-    "")              echo "$def" ;;
-    *)               printf "   resposta '%s' não reconhecida — usando '%s'\n" "$ans" "$def" >/dev/tty; echo "$def" ;;
+  printf '%s\n' "$body" >"$(_run_file "$agent" out)"
+  printf 'done'          >"$(_run_file "$agent" status)"
+  echo "✅ resposta de '$agent' registrada (task ${task:-$cur})"
+}
+
+# ---------------------------------------------------------------------------
+# Leitura de resultado
+# ---------------------------------------------------------------------------
+result() { # $1 agente  (não-bloqueante)
+  local agent="${1:-}" st
+  _require_agent "$agent" || return 1
+  st="$(cat "$(_run_file "$agent" status)" 2>/dev/null)"
+  if [ -s "$(_run_file "$agent" out)" ]; then cat "$(_run_file "$agent" out)"; return 0; fi
+  case "$st" in
+    running) echo "(sem resposta ainda — '$agent' está processando)" ;;
+    *)       echo "(sem resposta ainda — nenhuma tarefa despachada para '$agent')" ;;
   esac
 }
 
-# despacho ASSÍNCRONO (não-bloqueante): retorna na hora, o worker roda em background.
-# É o que evita o líder gastar token "esperando".
-dispatch() { # $1 role  $2.. texto
-  local role="$1"; shift; local text="$*"
-  local agent f sid
-  case "$role" in coder|reviewer) ;; *) echo "papel inválido: '$role' (use coder|reviewer)"; return 1 ;; esac
-  if [ "$(_role_backend "$role")" = codex ]; then dispatch_codex "$role" "$text"; return; fi
-  case "$role" in
-    coder)    agent="$ORCHESTRA_CODER_AGENT" ;;
-    reviewer) agent="$ORCHESTRA_REVIEWER_AGENT" ;;
-  esac
-  f="$ORCHESTRA_STATE/$role.session"
-  [ -s "$f" ] || { echo "❌ sessão de '$role' não existe — rode 'orchestra up' primeiro"; return 1; }
-  sid="$(cat "$f")"
-  # salva baseline (contagem de mensagens pré-despacho) para --wait detectar resposta nova
-  printf '%s' "$(_session_msgcount "$sid")" >"$ORCHESTRA_STATE/$role.baseline"
-  python3 - "$OC_URL" "$sid" "$text" "$agent" "$ORCHESTRA_MODEL" <<'PY'
-import sys, json, urllib.request, urllib.error
-url, sid, text, agent, model = sys.argv[1:6]
-payload = {"agent": agent, "parts": [{"type": "text", "text": text}]}
-if model:  # só força o modelo se ORCHESTRA_MODEL estiver definido; senão usa o default do OpenCode
-    prov, _, mid = model.partition("/")
-    payload["model"] = {"providerID": prov, "modelID": mid}
-body = json.dumps(payload).encode()
-req = urllib.request.Request(f"{url}/session/{sid}/prompt_async", data=body,
-                            headers={"Content-Type": "application/json"}, method="POST")
-try:
-    urllib.request.urlopen(req, timeout=15)
-    print(f"📨 enviado ao {agent} (sessão {sid}) — rodando na TUI, sem bloquear o líder")
-except urllib.error.HTTPError as e:
-    print("❌", e.code, e.read().decode()[:200]); sys.exit(1)
-except Exception as e:
-    print("❌", e); sys.exit(1)
-PY
-}
+# BLOQUEANTE: espera a resposta da ÚLTIMA tarefa despachada.
+# exit 0 ok · 1 validação · 2 timeout ([TIMEOUT/PARCIAL]) · 3 erro de ambiente
+result_wait() { # $1 agente  $2 timeout  $3 caller
+  local agent="${1:-}" timeout="${2:-$ORCHESTRA_TIMEOUT}" caller="${3:-}"
+  local elapsed=0 interval=2 st pane usage_msg
 
-# despacho ASSÍNCRONO para o backend CODEX: dispara o turno em background (setsid),
-# que roda até completar escrevendo a resposta em <role>.codex.last e o estado em
-# <role>.codex.status. O painel (codex --remote) enxerga o mesmo thread ao vivo.
-dispatch_codex() { # $1 role  $2 text
-  local role="$1" text="$2" tid last statf log tfile
-  tfile="$ORCHESTRA_STATE/$role.codex.thread"
-  [ -s "$tfile" ] || { echo "❌ thread codex de '$role' não existe — rode 'orchestra up' primeiro"; return 1; }
-  ensure_codex_server >/dev/null || { echo "❌ codex app-server indisponível — veja $ORCHESTRA_STATE/codex-server.log"; return 1; }
-  tid="$(cat "$tfile")"
-  last="$ORCHESTRA_STATE/$role.codex.last"
-  statf="$ORCHESTRA_STATE/$role.codex.status"
-  log="$ORCHESTRA_STATE/$role.codex.log"
-  rm -f "$last" 2>/dev/null || true
-  printf 'running' >"$statf"
-  setsid python3 "$CODEX_CLIENT" --sock "$CODEX_SOCK" dispatch \
-    --thread "$tid" --text "$text" --last "$last" --status "$statf" --timeout 600 \
-    >"$log" 2>&1 </dev/null &
-  echo "📨 enviado ao codex ($role, thread $tid) — rodando no app-server, sem bloquear o líder"
-}
+  if [ "$caller" = await ]; then usage_msg="uso: orchestra await <agente> [timeout_segundos]"
+  else usage_msg="uso: orchestra result <agente> --wait [timeout_segundos]"; fi
+  [ -n "$agent" ] || { echo "$usage_msg" >&2; return 1; }
+  _require_agent "$agent" || return 1
+  if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+    echo "❌ timeout inválido: '$timeout' (inteiro positivo de segundos)" >&2; return 1
+  fi
+  if [ ! -s "$(_run_file "$agent" task)" ]; then
+    echo "❌ nenhuma tarefa despachada para '$agent' — rode 'orchestra send $agent \"…\"' antes" >&2
+    return 1
+  fi
 
-# lê o resultado do backend codex (sob demanda). usado por result() quando o papel é codex.
-result_codex() { # $1 role
-  local role="$1" last statf st
-  last="$ORCHESTRA_STATE/$role.codex.last"
-  statf="$ORCHESTRA_STATE/$role.codex.status"
-  st="$(cat "$statf" 2>/dev/null)"
-  if [ -s "$last" ]; then cat "$last"; echo
-  elif [ "$st" = running ]; then echo "(sem resposta ainda — o worker codex pode estar processando)"
-  else echo "(sem resposta ainda)"; fi
-}
-
-# última resposta do worker (sob demanda — não fica em loop gastando token)
-result() { # $1 role
-  local role="${1:-}" f sid
-  [ -n "$role" ] || { echo "uso: orchestra result coder|reviewer"; return 1; }
-  case "$role" in coder|reviewer) ;; *) echo "papel inválido: '$role' (use coder|reviewer)"; return 1 ;; esac
-  if [ "$(_role_backend "$role")" = codex ]; then result_codex "$role"; return; fi
-  f="$ORCHESTRA_STATE/$role.session"
-  [ -s "$f" ] || { echo "sessão de '$role' não existe"; return 1; }
-  sid="$(cat "$f")"
-  curl -s "$OC_URL/session/$sid/message" | python3 -c "
-import sys, json
-d = json.load(sys.stdin); d = d if isinstance(d, list) else d.get('data', [])
-asst = [m for m in d if (m.get('info', {}) or {}).get('role') == 'assistant']
-if not asst:
-    print('(sem resposta ainda — o worker pode estar processando)'); raise SystemExit
-m = asst[-1]
-txt = ' '.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
-print(txt or '(processando ou resposta sem texto)')"
-}
-
-# resultado BLOQUEANTE: faz poll a cada ~3s no endpoint /session/<sid>/message
-# até a resposta do worker à ÚLTIMA tarefa despachada estar COMPLETA.
-# usa o baseline salvo em dispatch() para detectar mensagem assistant NOVA.
-# espera BLOQUEANTE para o backend codex: faz poll no arquivo de status escrito
-# pelo dispatch em background. Mesmos exit codes do result_wait do OpenCode:
-# 0 ok · 2 timeout ([TIMEOUT/PARCIAL]) · 3 erro.
-result_wait_codex() { # $1 role  $2 timeout
-  local role="$1" timeout="$2" statf last st elapsed=0 interval=3
-  statf="$ORCHESTRA_STATE/$role.codex.status"
-  last="$ORCHESTRA_STATE/$role.codex.last"
   while [ "$elapsed" -lt "$timeout" ]; do
-    st="$(cat "$statf" 2>/dev/null)"
+    st="$(cat "$(_run_file "$agent" status)" 2>/dev/null)"
     case "$st" in
-      done)  [ -s "$last" ] && cat "$last" && echo; return 0 ;;
-      error) echo "❌ erro no worker codex:" >&2; [ -s "$last" ] && cat "$last" && echo; return 3 ;;
-      timeout)
-        echo "⚠️  o worker codex atingiu o timeout interno" >&2
-        printf '[TIMEOUT/PARCIAL] '; [ -s "$last" ] && cat "$last" || printf '(sem resposta)'; echo; return 2 ;;
+      done)  cat "$(_run_file "$agent" out)"; return 0 ;;
+      error) echo "❌ '$agent' reportou erro:" >&2; cat "$(_run_file "$agent" out)" 2>/dev/null; return 3 ;;
     esac
     sleep "$interval"; elapsed=$((elapsed+interval))
   done
-  echo "⚠️  timeout (${timeout}s) aguardando o worker coder/reviewer" >&2
-  printf '[TIMEOUT/PARCIAL] '; [ -s "$last" ] && cat "$last" || printf '(sem resposta ainda)'; echo
+
+  # timeout: devolve o que der, SEMPRE marcado como não confiável.
+  echo "⚠️  timeout (${timeout}s) esperando '$agent'." >&2
+  if [ -s "$(_run_file "$agent" out)" ]; then
+    printf '[TIMEOUT/PARCIAL] '; cat "$(_run_file "$agent" out)"
+  else
+    # fallback: cauda da tela do painel — o worker pode ter respondido sem
+    # executar 'orchestra done'.
+    pane="$(mux_pane_id "$agent" 2>/dev/null)"
+    if [ -n "$pane" ]; then
+      echo "⚠️  sem 'orchestra done' — mostrando a cauda do painel (NÃO confiável):" >&2
+      printf '[TIMEOUT/PARCIAL] '; mux_capture "$pane" | tail -n 40
+    else
+      echo "[TIMEOUT/PARCIAL] (sem resposta e sem painel)"
+    fi
+  fi
   return 2
 }
 
-result_wait() { # $1 role  $2 timeout_segundos (padrão 300)  $3 caller (opcional: "await")
-  local role="${1:-}" timeout="${2:-300}" caller="${3:-}" f sid baseline
-  local usage_msg
-  if [ "$caller" = "await" ]; then
-    usage_msg="uso: orchestra await <papel> [timeout_segundos]"
+# ---------------------------------------------------------------------------
+# Gestão do time
+# ---------------------------------------------------------------------------
+# estado legível da última tarefa do agente
+_agent_state() { # $1 agente
+  case "$(cat "$(_run_file "$1" status)" 2>/dev/null)" in
+    running) printf 'trabalhando…' ;;
+    done)    printf 'respondeu' ;;
+    error)   printf 'erro' ;;
+    *)       printf '—' ;;
+  esac
+}
+
+# uma linha da tabela do time (mesma ordem de colunas do menu)
+_agent_row() { # $1 agente
+  local n="$1" icon lbl desc b pane
+  if [ "$n" = leader ]; then icon="$(role_icon leader)"; lbl=LÍDER
+  else icon="$(role_icon "$(team_field "$n" role)")"
+       lbl="$(printf '%s' "$n" | tr '[:lower:]' '[:upper:]')"; fi
+  desc="$(_ellipsis "$(role_summary "$n")" 29)"
+  b="$(team_field "$n" backend)"
+  pane="$(mux_pane_id "$n" 2>/dev/null)"
+  printf '   %s %s %s %s %s %s\n' "$icon" "$(_pad "$(_ellipsis "$lbl" 10)" 11)" "$(_pad "$desc" 30)" \
+    "$(_pad "$b" 9)" "$(_pad "$([ -n "$pane" ] && echo aberto || echo '⚠ ausente')" 9)" \
+    "$([ "$n" = leader ] && echo '—' || _agent_state "$n")"
+}
+
+agents_list() {
+  team_ensure
+  local n
+  printf '\n🎼 \033[1mTime em %s\033[0m\n\n' "$ORCHESTRA_PROJECT"
+  printf '   \033[2m%s %s %s %s %s\033[0m\n' "$(_pad AGENTE 14)" "$(_pad "O QUE FAZ" 30)" \
+    "$(_pad IA 9)" "$(_pad PAINEL 9)" "ÚLTIMA TAREFA"
+  _agent_row leader
+  while IFS= read -r n; do [ -n "$n" ] && _agent_row "$n"; done < <(team_names)
+  printf '\n  \033[2mdespache com: orchestra send <agente> "<tarefa>"  ·  orchestra await <agente>\033[0m\n\n'
+}
+
+# Resolve o papel de um agente NOVO: preset conhecido, ou 'custom' com um prompt
+# editável no projeto. Ecoa "role<TAB>prompt_file". Usado pelo 'add' e pelo
+# ORCHESTRA_TEAM, para os dois caminhos criarem agentes idênticos.
+_resolve_role() { # $1 nome  [$2 role desejado]  [$3 texto do prompt]
+  local name="$1" role="${2:-}" text="${3:-}" pf=""
+  [ -n "$role" ] || role="$name"
+  # instruções dadas na criação => agente custom, com o texto do usuário
+  if [ -n "$text" ]; then
+    mkdir -p "$(team_prompts)"
+    pf=".orchestra/prompts/$name.md"
+    { printf 'Você é o agente **%s** do Orchestra Agents.\n\n' "$name"
+      printf '%s\n' "$text"
+      printf '\nTrabalhe no projeto onde este painel foi aberto.\n'
+    } >"$ORCHESTRA_PROJECT/$pf"
+    printf '%s\t%s' custom "$pf"
+    return 0
+  fi
+  case " $ORCHESTRA_ROLES " in
+    *" $role "*) ;;
+    *) role=custom
+       mkdir -p "$(team_prompts)"
+       pf=".orchestra/prompts/$name.md"
+       [ -f "$ORCHESTRA_PROJECT/$pf" ] || {
+         cp "$ORCHESTRA_HOME/agents/roles/custom.md" "$ORCHESTRA_PROJECT/$pf" 2>/dev/null || \
+           printf 'Você é o agente %s do Orchestra.\n' "$name" >"$ORCHESTRA_PROJECT/$pf"
+       } ;;
+  esac
+  printf '%s\t%s' "$role" "$pf"
+}
+
+# Avisa o LÍDER, AO VIVO, que o time mudou — injetando a nota no painel dele.
+# Sem isto o líder só conhece o time montado quando o painel dele subiu, e um agente
+# criado depois seria ignorado até o próximo 'orchestra up'.
+notify_leader() { # $1 texto
+  local pane self
+  mux_available || return 0
+  pane="$(mux_pane_id leader 2>/dev/null)"
+  [ -n "$pane" ] || return 0
+  # se o comando partiu do próprio painel do líder, ele já sabe: não injetar nele mesmo
+  self="${ZELLIJ_PANE_ID:-}"
+  [ -n "$self" ] && [ "$pane" = "terminal_$self" ] && return 0
+  mux_send_text "$pane" "$1" && mux_enter "$pane"
+}
+
+agent_add() { # $1 nome  [$2 backend]  [$3 role]  [$4 texto do prompt]
+  local name="${1:-}" backend="${2:-}" role="${3:-}" text="${4:-}" pf="" rc
+  team_ensure
+  team_valid_name "$name" || {
+    case "$name" in
+      *' '*) echo "❌ o nome não pode ter espaços: '$name' — use - ou _ (ex.: deploy-prod)" >&2 ;;
+      leader) echo "❌ 'leader' é reservado — use 'orchestra leader <ia>' para trocar o líder" >&2
+              return 1 ;;
+      *) echo "❌ nome inválido: '$name' — comece por letra e use só minúsculas, dígitos, - ou _" >&2 ;;
+    esac
+    echo "   (o nome vira comando: orchestra send <nome> \"<tarefa>\")" >&2
+    return 1; }
+  team_exists "$name" && { echo "❌ agente '$name' já existe" >&2; return 1; }
+  # A IA é ESCOLHA DO USUÁRIO — nunca um default silencioso. Sem ela: pergunta (se um
+  # humano estiver digitando) ou falha explicando. É isto que impede um agente líder de
+  # criar tudo em 'claude' só por ter esquecido a flag.
+  if [ -z "$backend" ]; then
+    if [ -t 0 ]; then
+      printf 'qual IA roda o agente "%s"? [%s]: ' "$name" "$(_human_list "$ORCHESTRA_BACKENDS")"
+      read -r backend || backend=""
+    fi
+    if [ -z "$backend" ]; then
+      echo "❌ falta dizer qual IA roda o agente '$name'." >&2
+      echo "   use: orchestra add $name --ia $(printf '%s' "$ORCHESTRA_BACKENDS" | tr ' ' '|') --prompt \"<o que ele faz>\"" >&2
+      echo "   (a escolha da IA é do usuário — pergunte a ele antes de criar)" >&2
+      return 1
+    fi
+  fi
+  case " $ORCHESTRA_BACKENDS " in *" $backend "*) ;; *) echo "❌ IA inválida: '$backend' (use: $(_human_list "$ORCHESTRA_BACKENDS"))" >&2; return 1 ;; esac
+  backend_available "$backend" || { echo "❌ '$backend' não está instalado — $(backend_url "$backend")" >&2; return 1; }
+  IFS=$'\t' read -r role pf <<<"$(_resolve_role "$name" "$role" "$text")"
+  team_add "$name" "$backend" "$role" "$pf"; rc=$?
+  [ "$rc" = 0 ] || { echo "❌ falha ao registrar '$name'" >&2; return 1; }
+  echo "✔ agente '$name' criado ($backend · $role)"
+  if [ -n "$pf" ]; then
+    echo "  prompt em: $pf (edite à vontade)"
+    # sem descrição o agente é genérico E o líder não sabe quando usá-lo
+    if [ -z "$text" ]; then
+      echo "  ⚠️  ele ainda não tem especialidade: o líder vai vê-lo como 'agente customizado'."
+      echo "     Descreva a função no arquivo acima, ou recrie com:"
+      echo "     orchestra add $name --ia $backend --prompt \"<o que ele faz>\""
+    fi
+  fi
+  if mux_available; then
+    mux_new_pane "$name" "$ORCHESTRA_PROJECT" >/dev/null && echo "  🎬 painel aberto"
   else
-    usage_msg="uso: orchestra result <papel> --wait [timeout_segundos]"
+    echo "  (sem multiplexador ativo — o painel abre no próximo 'orchestra up')"
   fi
-  [ -n "$role" ] || { echo "$usage_msg"; return 1; }
-  case "$role" in coder|reviewer) ;; *) echo "papel inválido: '$role' (use coder|reviewer)"; return 1 ;; esac
-  # BLOCKER 1: valida timeout no bash com regex de dígitos puros
-  if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
-    echo "❌ timeout inválido: '$timeout' (deve ser número inteiro positivo de segundos)" >&2; return 1
+  notify_leader "$(cat <<EOF
+[ORCHESTRA] O time mudou: o agente '$name' entrou agora ($backend).
+Função: $(role_summary "$name")
+Delegue com: orchestra send $name "<tarefa>"   ·   resultado: orchestra await $name
+Passe a considerá-lo nas próximas tarefas que forem da função dele. Responda só "ok".
+EOF
+)" && echo "  📣 líder avisado"
+}
+
+agent_rm() { # $1 nome
+  local name="${1:-}" pane
+  team_ensure
+  [ -n "$name" ] || { echo "❌ falta o nome. uso: orchestra rm <agente>" >&2; return 1; }
+  [ "$name" = leader ] && { echo "❌ o líder não pode ser removido — troque com 'orchestra leader <backend>'" >&2; return 1; }
+  team_exists "$name" || { echo "❌ agente '$name' não existe" >&2; return 1; }
+  pane="$(mux_pane_id "$name" 2>/dev/null)"
+  team_rm "$name" || { echo "❌ falha ao remover '$name'" >&2; return 1; }
+  [ -n "$pane" ] && mux_kill_pane "$pane" >/dev/null 2>&1
+  rm -f "$ORCHESTRA_RUN_DIR/$name."* 2>/dev/null || true
+  echo "✔ agente '$name' removido"
+  notify_leader "[ORCHESTRA] O time mudou: o agente '$name' saiu. NÃO delegue mais para ele. Responda só \"ok\"." \
+    && echo "  📣 líder avisado"
+}
+
+# recria os painéis de agentes cujo painel morreu/foi fechado
+heal() {
+  team_ensure
+  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra up'" >&2; return 1; }
+  local n missing=0
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    if [ -z "$(mux_pane_id "$n" 2>/dev/null)" ]; then
+      printf '  ⟳ recriando painel de %s…' "$n"
+      if mux_new_pane "$n" "$ORCHESTRA_PROJECT" >/dev/null; then echo ' ok'; else echo ' falhou'; fi
+      missing=$((missing+1))
+    fi
+  done < <(team_all_names)
+  [ "$missing" = 0 ] && echo "✔ todos os painéis estão no ar" || echo "✔ $missing painel(is) recriado(s)"
+}
+
+# troca o backend do líder
+leader_set() { # $1 backend
+  local b="${1:-}" pane
+  team_ensure
+  case " $ORCHESTRA_BACKENDS " in *" $b "*) ;; *) echo "❌ IA inválida: '$b' (use: $(_human_list "$ORCHESTRA_BACKENDS"))" >&2; return 1 ;; esac
+  backend_available "$b" || { echo "❌ '$b' não está instalado — $(backend_url "$b")" >&2; return 1; }
+  team_set leader backend "$b" || { echo "❌ falha ao trocar o líder" >&2; return 1; }
+  echo "✔ líder agora é $b"
+  pane="$(mux_pane_id leader 2>/dev/null)"
+  if [ -n "$pane" ]; then
+    echo "  ⚠️  o painel do líder ainda roda o backend anterior."
+    echo "     Feche-o (Ctrl-C durante a contagem) ou rode 'orchestra up' de novo para aplicar."
   fi
-  if [ "$(_role_backend "$role")" = codex ]; then result_wait_codex "$role" "$timeout"; return; fi
-  f="$ORCHESTRA_STATE/$role.session"
-  [ -s "$f" ] || { echo "sessão de '$role' não existe"; return 1; }
-  sid="$(cat "$f")"
-  # BLOCKER 3: baseline ausente → avisa e usa contagem atual como referência,
-  # para NÃO retornar resposta antiga/stale como se fosse nova.
-  if [ -s "$ORCHESTRA_STATE/$role.baseline" ]; then
-    baseline="$(cat "$ORCHESTRA_STATE/$role.baseline")"
-  else
-    echo "⚠️  baseline ausente (sem dispatch prévio?) — usando contagem atual como referência" >&2
-    baseline="$(_session_msgcount "$sid")"
-  fi
-  # defesa: baseline deve ser dígitos puros
-  [[ "$baseline" =~ ^[0-9]+$ ]] || baseline=0
-  python3 - "$OC_URL" "$sid" "$baseline" "$timeout" <<'PY'
-import sys, json, time, urllib.request, urllib.error
-url, sid, baseline_str, timeout_str = sys.argv[1:5]
-
-# BLOCKER 1: try/except ValueError para conversões, com erro amigável em stderr
-try:
-    baseline = int(baseline_str)
-except ValueError:
-    print(f"\u274c baseline inv\u00e1lido: '{baseline_str}' (deve ser n\u00famero inteiro)", file=sys.stderr)
-    sys.exit(1)
-try:
-    timeout = int(timeout_str)
-except ValueError:
-    print(f"\u274c timeout inv\u00e1lido: '{timeout_str}' (deve ser n\u00famero inteiro de segundos)", file=sys.stderr)
-    sys.exit(1)
-
-elapsed = 0
-interval = 3
-messages = []
-
-while elapsed < timeout:
-    try:
-        resp = urllib.request.urlopen(f"{url}/session/{sid}/message", timeout=10)
-        data = json.load(resp)
-        messages = data if isinstance(data, list) else data.get('data', [])
-    except urllib.error.HTTPError as e:
-        # erro HTTP permanente (4xx, 5xx) → loga e sai
-        # (HTTPError é subclasse de URLError — DEVE vir ANTES do handler de rede)
-        body = ""
-        try:
-            body = e.read().decode()[:200]
-        except Exception:
-            pass
-        print(f"\u274c erro HTTP {e.code} ao consultar sess\u00e3o: {body}", file=sys.stderr)
-        sys.exit(3)
-    except (urllib.error.URLError, TimeoutError, OSError):
-        # ALTA (a): retry apenas em erros transientes de rede
-        time.sleep(interval)
-        elapsed += interval
-        continue
-    except json.JSONDecodeError as e:
-        # JSON inv\u00e1lido → loga e sai
-        print(f"\u274c resposta inv\u00e1lida do servidor (JSON): {e}", file=sys.stderr)
-        sys.exit(3)
-
-    # busca mensagens assistant NOVAS (\u00edndice >= baseline, ap\u00f3s as pr\u00e9-despacho)
-    new_asst = []
-    for i, m in enumerate(messages):
-        info = m.get('info', {}) or {}
-        if info.get('role') == 'assistant' and i >= baseline:
-            new_asst.append(m)
-
-    if new_asst:
-        m = new_asst[-1]
-        info = m.get('info', {}) or {}
-        tinfo = info.get('time', {}) or {}
-        completed = tinfo.get('completed')
-        txt = ' '.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
-
-        if completed and txt:
-            print(txt)
-            sys.exit(0)
-
-    time.sleep(interval)
-    elapsed += interval
-
-# timeout: mostra o que houver com aviso em stderr e marca parcial no stdout (exit 2)
-# ALTA (b): prefixo [TIMEOUT/PARCIAL] deixa claro que o texto não é confiável
-print(f"\u26a0\ufe0f  timeout ({timeout}s) — mostrando resposta parcial, se houver:", file=sys.stderr)
-asst = [m for m in messages if (m.get('info', {}) or {}).get('role') == 'assistant']
-if asst:
-    m = asst[-1]
-    txt = ' '.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
-    print(f"[TIMEOUT/PARCIAL] {txt}" if txt else "[TIMEOUT/PARCIAL] (processando ou resposta sem texto)")
-else:
-    print("[TIMEOUT/PARCIAL] (sem resposta ainda)")
-sys.exit(2)
-PY
 }
 
 status() {
-  local any=0
-  if oc_up; then echo "🟢 OpenCode: no ar ($OC_URL)"; any=1; else echo "⚪ OpenCode: parado"; fi
-  if codex_up; then echo "🟢 Codex app-server: no ar ($CODEX_SOCK)"; any=1; else echo "⚪ Codex app-server: parado"; fi
-  if [ "$any" = 0 ]; then echo "🔴 nenhum servidor no ar (rode 'orchestra up')"; return; fi
-  local em; em="$(_effective_model)"
-  if [ -n "$ORCHESTRA_MODEL" ]; then echo "   modelo OpenCode: $em (forçado)"
-  elif [ -n "$em" ]; then echo "   modelo OpenCode: $em (default)"; fi
-  [ -n "$ORCHESTRA_CODEX_MODEL" ] && echo "   modelo Codex: $ORCHESTRA_CODEX_MODEL"
-  local proj; proj="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"
-  [ -n "$proj" ] && echo "   projeto: $proj"
-  local role backend sid tid st
-  for role in coder reviewer; do
-    backend="$(_role_backend "$role")"
-    if [ "$backend" = codex ]; then
-      tid="$(cat "$ORCHESTRA_STATE/$role.codex.thread" 2>/dev/null)"
-      st="$(cat "$ORCHESTRA_STATE/$role.codex.status" 2>/dev/null)"
-      if [ -n "$tid" ]; then echo "   $role → codex thread $tid${st:+ [$st]}"
-      else echo "   $role → codex (sem thread)"; fi
+  team_ensure
+  local s; s="$(mux_session 2>/dev/null)"
+  if mux_available; then echo "🟢 multiplexador: $(mux_backend) (sessão ${s:-?})"
+  else echo "⚪ multiplexador: fora do ar (rode 'orchestra up')"; fi
+  echo "   projeto: $ORCHESTRA_PROJECT"
+  echo "   time:    $(team_file)"
+  agents_list
+}
+
+teardown() {
+  local s; s="$(mux_session 2>/dev/null)"
+  if [ -n "$s" ] && [ "$(mux_backend)" = zellij ]; then
+    if zellij delete-session --force "$s" >/dev/null 2>&1; then
+      echo "🛑 sessão '$s' encerrada"; return 0
+    fi
+  fi
+  echo "nada para encerrar (nenhuma sessão ativa registrada)"
+}
+
+# ---------------------------------------------------------------------------
+# Menu VISUAL de composição do time (setas). Desenha em /dev/tty.
+# Sem TTY (CI/pipe) usa ORCHESTRA_TEAM / o time salvo, sem travar.
+# ---------------------------------------------------------------------------
+
+# aplica ORCHESTRA_TEAM e os aliases herdados por cima do time salvo
+# Aplica ORCHESTRA_TEAM ("nome=backend" ou "nome=backend:papel", separados por
+# vírgula) e os aliases herdados por cima do time salvo.
+_apply_team_env() {
+  local spec pair name rest backend role pf
+  [ -n "$ORCHESTRA_CODER" ]    && team_set coder    backend "$ORCHESTRA_CODER"    2>/dev/null
+  [ -n "$ORCHESTRA_REVIEWER" ] && team_set reviewer backend "$ORCHESTRA_REVIEWER" 2>/dev/null
+  [ -n "$ORCHESTRA_TEAM" ] || return 0
+  spec="${ORCHESTRA_TEAM//,/ }"
+  for pair in $spec; do
+    name="${pair%%=*}"; rest="${pair#*=}"
+    backend="${rest%%:*}"
+    # papel explícito só quando existe o sufixo ':papel'
+    if [ "$rest" = "$backend" ]; then role=""; else role="${rest#*:}"; fi
+    [ -n "$name" ] && [ -n "$backend" ] || continue
+    case " $ORCHESTRA_BACKENDS " in *" $backend "*) ;; *) continue ;; esac
+    if [ "$name" = leader ]; then team_set leader backend "$backend"; continue; fi
+    team_valid_name "$name" || continue
+    if team_exists "$name"; then
+      team_set "$name" backend "$backend"
+      # trocar o papel de um agente existente também refaz o prompt quando custom
+      if [ -n "$role" ] && [ "$role" != "$(team_field "$name" role)" ]; then
+        IFS=$'\t' read -r role pf <<<"$(_resolve_role "$name" "$role")"
+        team_set "$name" role "$role"
+        [ -n "$pf" ] && team_set "$name" prompt_file "$pf"
+      fi
     else
-      sid="$(cat "$ORCHESTRA_STATE/$role.session" 2>/dev/null)"
-      if [ -n "$sid" ]; then echo "   $role → opencode $sid ($(_session_msgcount "$sid") msgs)"
-      else echo "   $role → opencode (sem sessão)"; fi
+      IFS=$'\t' read -r role pf <<<"$(_resolve_role "$name" "$role")"
+      team_add "$name" "$backend" "$role" "$pf" 2>/dev/null || true
     fi
   done
 }
 
-teardown() {
-  local stopped=0
-  if pkill -f "opencode serve --port $ORCHESTRA_PORT" 2>/dev/null; then echo "🛑 OpenCode encerrado"; stopped=1; fi
-  if pkill -f "app-server --listen unix://$CODEX_SOCK" 2>/dev/null; then echo "🛑 Codex app-server encerrado"; stopped=1; fi
-  rm -f "$CODEX_SOCK" 2>/dev/null || true
-  [ "$stopped" = 1 ] || echo "servidores já estavam parados"
+select_team() {
+  team_ensure
+  _apply_team_env
+  # sem terminal controlador (pipe/CI) ou com o time já fixado por env: não abre UI
+  if [ -n "$ORCHESTRA_TEAM" ] || ! ( : >/dev/tty ) 2>/dev/null; then return 0; fi
+
+  local names=() backends=() roles=() row=0 nrows key k2 i
+  _st_load() {
+    names=(leader); backends=("$(team_field leader backend)"); roles=(leader)
+    local n
+    while IFS= read -r n; do
+      [ -n "$n" ] || continue
+      names+=("$n"); backends+=("$(team_field "$n" backend)"); roles+=("$(team_field "$n" role)")
+    done < <(team_names)
+    # +2 linhas especiais no fim: "adicionar agente" e "sair"
+    nrows=$(( ${#names[@]} + 2 ))
+  }
+  _st_row_add()  { echo "${#names[@]}"; }
+  _st_row_quit() { echo "$(( ${#names[@]} + 1 ))"; }
+  _st_t() { printf "$@" >/dev/tty; }
+  _st_cycle() { # troca o backend da linha corrente
+    [ "$row" -lt "${#names[@]}" ] || return 0
+    local cur="${backends[$row]}" list=($ORCHESTRA_BACKENDS) j=0 k
+    for k in "${!list[@]}"; do [ "${list[$k]}" = "$cur" ] && j=$k; done
+    backends[$row]="${list[$(( (j+1) % ${#list[@]} ))]}"
+  }
+  _st_render() {
+    local i arrow lbl b cell line sep desc
+    _st_t '\033[u\033[J'          # volta à âncora e limpa daqui para baixo
+    _st_t '   \033[2m%s %s %s\033[0m\n' \
+      "$(_pad AGENTE 14)" "$(_pad "O QUE FAZ" 30)" "IA QUE RODA"
+    for i in "${!names[@]}"; do
+      [ "$i" = "$row" ] && arrow='\033[1;36m▸\033[0m' || arrow=' '
+      [ "${roles[$i]}" = leader ] && lbl="LÍDER" \
+        || lbl="$(printf '%s' "${names[$i]}" | tr '[:lower:]' '[:upper:]')"
+      desc="$(_ellipsis "$(role_summary "${names[$i]}")" 29)"
+      line=""; sep=""
+      for b in $ORCHESTRA_BACKENDS; do
+        # sem espaços dentro da célula: qualquer padding só no destaque desalinharia
+        # a coluna inteira, porque cada linha destaca uma IA diferente.
+        if [ "$b" = "${backends[$i]}" ]; then cell="\033[1;7;36m$b\033[0m"; else cell="\033[2m$b\033[0m"; fi
+        line="$line$sep$cell"; sep="\033[2m,\033[0m "
+      done
+      _st_t ' %b %s %s %s %b\033[K\n' "$arrow" "$(role_icon "${roles[$i]}")" \
+        "$(_pad "$(_ellipsis "$lbl" 10)" 11)" "$(_pad "$desc" 30)" "$line"
+    done
+    _st_t '\033[K\n'
+    [ "$row" = "$(_st_row_add)" ] && arrow='\033[1;36m▸\033[0m' || arrow=' '
+    _st_t ' %b \033[1m+\033[0m adicionar agente\033[K\n' "$arrow"
+    [ "$row" = "$(_st_row_quit)" ] && arrow='\033[1;36m▸\033[0m' || arrow=' '
+    _st_t ' %b \033[1m✖\033[0m sair sem abrir\033[K\n' "$arrow"
+    _st_t '\033[K\n'
+    _st_t '   \033[2m↑/↓ navegar · ←/→ trocar a IA · a adicionar · d remover\033[0m\033[K\n'
+    _st_t '   \033[2mEnter abre o time no zellij · q sai sem abrir\033[0m\033[K\n'
+  }
+  _st_add() {
+    local name backend role
+    _st_t '\033[?25h\n'
+    # o nome vira argumento de comando ('orchestra send <nome>'), por isso a regra
+    # é estrita. Explicamos ANTES e deixamos tentar de novo, em vez de só recusar.
+    while true; do
+      printf '  nome do agente \033[2m— minúsculas, sem espaços e sem acentos (ex.: tester, deploy-prod)\033[0m\n  ▸ ' >/dev/tty
+      read -r name </dev/tty || name=""
+      case "$name" in
+        '') printf '  \033[2mcancelado\033[0m\n' >/dev/tty; sleep 1; _st_t '\033[?25l'; return ;;
+      esac
+      if [ "$name" = leader ]; then
+        printf '  ✖ "leader" é reservado — troque a IA do líder com ←/→ na linha dele\n' >/dev/tty; continue
+      fi
+      if team_exists "$name"; then
+        printf '  ✖ já existe um agente chamado "%s" — escolha outro nome\n' "$name" >/dev/tty; continue
+      fi
+      case "$name" in
+        *' '*) printf '  ✖ o nome não pode ter espaços — use - ou _ (ex.: deploy-prod)\n' >/dev/tty; continue ;;
+      esac
+      if ! team_valid_name "$name"; then
+        printf '  ✖ nome inválido: comece por letra e use só minúsculas, números, - ou _\n' >/dev/tty
+        printf '    \033[2m(o nome vira comando: orchestra send <nome> "<tarefa>")\033[0m\n' >/dev/tty
+        continue
+      fi
+      break
+    done
+    printf '  função — pronta [%s]\n' "$(_human_list "$ORCHESTRA_ROLES")" >/dev/tty
+    printf '           ou escreva a sua (ex.: frontend, deploy) [Enter = %s]: ' "$name" >/dev/tty
+    read -r role </dev/tty || role=""
+    [ -n "$role" ] || role="$name"
+    printf '  qual IA roda esse agente [%s] (Enter = claude): ' "$(_human_list "$ORCHESTRA_BACKENDS")" >/dev/tty
+    read -r backend </dev/tty || backend=""
+    [ -n "$backend" ] || backend=claude
+    case " $ORCHESTRA_BACKENDS " in *" $backend "*) ;; *) backend=claude ;; esac
+    # papel sem preset => o usuário descreve a função aqui mesmo
+    local text=""
+    case " $ORCHESTRA_ROLES " in
+      *" $role "*) ;;
+      *) printf '  o que ele faz? \033[2m— é isto que ensina a função a ele E diz ao líder\n' >/dev/tty
+         printf '                  quando usá-lo (ex.: "Abre e atualiza Pull Requests via gh")\033[0m\n  ▸ ' >/dev/tty
+         read -r text </dev/tty || text=""
+         if [ -z "$text" ]; then
+           printf '  \033[2m⚠️  sem descrição ele fica genérico; edite depois em .orchestra/prompts/%s.md\033[0m\n' "$name" >/dev/tty
+           sleep 2
+         fi ;;
+    esac
+    agent_add "$name" "$backend" "$role" "$text" >/dev/null 2>&1
+    _st_load; _st_t '\033[?25l'
+  }
+  _st_del() {
+    [ "$row" -lt "${#names[@]}" ] || return 0
+    [ "${roles[$row]}" = leader ] && return 0
+    agent_rm "${names[$row]}" >/dev/null 2>&1
+    _st_load; [ "$row" -ge "$nrows" ] && row=$((nrows-1))
+  }
+
+  _st_load
+  _st_t '\n\033[1m🎛️  Monte o time deste projeto\033[0m\n'
+  _st_t '   \033[2m%s\033[0m\n\n' "$ORCHESTRA_PROJECT"
+  _st_t '\033[?25l'
+  trap 'printf "\033[?25h" >/dev/tty' RETURN INT
+  # âncora do bloco: cada redesenho volta AQUI e apaga o que houver abaixo. Sem isto,
+  # subir um número fixo de linhas erra a posição depois que o 'a'/'d' imprime perguntas,
+  # e o menu aparece duplicado na tela.
+  _st_t '\033[s'
+  _st_render
+  local quit=0
+  while true; do
+    IFS= read -rsn1 key </dev/tty || break
+    case "$key" in
+      $'\e')
+        # Esc sozinho (sem sequência de seta depois) = sair
+        k2=""
+        read -rsn2 -t 0.05 k2 </dev/tty
+        case "$k2" in
+          '[A') row=$(( (row+nrows-1)%nrows )) ;;
+          '[B') row=$(( (row+1)%nrows )) ;;
+          '[C'|'[D') _st_cycle ;;
+          '')   quit=1; break ;;
+        esac ;;
+      ' ')
+        if   [ "$row" = "$(_st_row_add)" ];  then _st_add
+        elif [ "$row" = "$(_st_row_quit)" ]; then quit=1; break
+        else _st_cycle; fi ;;
+      k|K) row=$(( (row+nrows-1)%nrows )) ;;
+      j|J) row=$(( (row+1)%nrows )) ;;
+      h|H|l|L) _st_cycle ;;
+      a|A) _st_add ;;
+      d|D) _st_del ;;
+      q|Q) quit=1; break ;;
+      '')
+        if   [ "$row" = "$(_st_row_add)" ];  then _st_add
+        elif [ "$row" = "$(_st_row_quit)" ]; then quit=1; break
+        else break; fi ;;
+    esac
+    _st_render
+  done
+  _st_t '\033[?25h\n'
+  trap - RETURN INT
+
+  # saiu pelo "sair": descarta as trocas de backend feitas na tela e sinaliza
+  # cancelamento a quem chamou (o 'up' não abre o zellij).
+  if [ "$quit" = 1 ]; then
+    unset -f _st_t _st_cycle _st_render _st_load _st_add _st_del _st_row_add _st_row_quit
+    return 2
+  fi
+
+  # persiste as escolhas
+  local specs=()
+  for i in "${!names[@]}"; do specs+=("${names[$i]}=${backends[$i]}:${roles[$i]}"); done
+  team_replace "${specs[@]}"
+  unset -f _st_t _st_cycle _st_render _st_load _st_add _st_del _st_row_add _st_row_quit
 }
 
-# diagnóstico de pré-requisitos, modelo/agente do OpenCode, servidor e PATH
+# ---------------------------------------------------------------------------
+# Diagnóstico
+# ---------------------------------------------------------------------------
 doctor() {
-  local ok=0 warn=0 fail=0 b p
+  local ok=0 warn=0 fail=0 b p n
   _dok(){   printf '  \033[1;32m✔\033[0m %s\n' "$*"; ok=$((ok+1)); }
   _dwarn(){ printf '  \033[1;33m!\033[0m %s\n' "$*"; warn=$((warn+1)); }
   _dfail(){ printf '  \033[1;31m✖\033[0m %s\n' "$*"; fail=$((fail+1)); }
 
   printf '\n🩺 Orchestra Agents — diagnóstico\n\n'
+  team_ensure
 
-  echo "Pré-requisitos:"
-  for b in claude opencode zellij git python3 curl; do
+  echo "Base:"
+  for b in zellij git python3; do
     if p="$(command -v "$b" 2>/dev/null)"; then _dok "$b — $p"
-    elif [ "$b" = opencode ] && [ -x "$HOME/.opencode/bin/opencode" ]; then _dok "opencode — $HOME/.opencode/bin/opencode"
-    else
-      case "$b" in
-        claude)   _dfail "claude ausente — https://docs.claude.com/claude-code" ;;
-        opencode) _dfail "opencode ausente — https://opencode.ai" ;;
-        zellij)   _dfail "zellij ausente — reinstale (install.sh) ou https://zellij.dev" ;;
-        *)        _dfail "$b ausente" ;;
-      esac
-    fi
+    else _dfail "$b ausente"; fi
   done
 
-  local em provider auth_file oc_cfg origin
-  em="$(_effective_model)"
-  [ -n "$ORCHESTRA_MODEL" ] && origin="forçado (ORCHESTRA_MODEL)" || origin="default do OpenCode"
-  echo; echo "OpenCode (modelo: ${em:-?} — $origin):"
-  if [ -z "$em" ]; then
-    _dwarn "não consegui detectar o modelo default do OpenCode — confira ~/.config/opencode/opencode.jsonc"
-  else
-    provider="${em%%/*}"
-    auth_file="$HOME/.local/share/opencode/auth.json"
-    if [ -f "$auth_file" ] && python3 -c "import json,sys;d=json.load(open('$auth_file'));sys.exit(0 if '$provider' in d else 1)" 2>/dev/null; then
-      _dok "provider '$provider' autenticado"
-    else
-      _dwarn "provider '$provider' não autenticado — rode: opencode auth login"
-    fi
-    if "$OPENCODE" models 2>/dev/null | grep -qx "$em"; then
-      _dok "modelo '$em' disponível"
-    else
-      _dwarn "modelo '$em' não listado em 'opencode models'"
-    fi
-  fi
-  oc_cfg="$HOME/.config/opencode/opencode.jsonc"
-  if [ -f "$oc_cfg" ] && grep -q "\"$ORCHESTRA_REVIEWER_AGENT\"" "$oc_cfg"; then
-    _dok "agente revisor '$ORCHESTRA_REVIEWER_AGENT' configurado"
-  else
-    _dwarn "agente '$ORCHESTRA_REVIEWER_AGENT' não encontrado — veja $ORCHESTRA_HOME/config/opencode.reviewer.jsonc"
-  fi
+  echo; echo "Backends de agente:"
+  for b in $ORCHESTRA_BACKENDS; do
+    if backend_available "$b"; then _dok "$b disponível"
+    else _dwarn "$b ausente — $(backend_url "$b")"; fi
+  done
 
-  echo; echo "Codex (opcional — só se escolher como coder/reviewer):"
-  if command -v codex >/dev/null 2>&1 || [ -x "$HOME/.local/bin/codex" ]; then
-    _dok "codex — $("$CODEX" --version 2>/dev/null || echo "$CODEX")"
-    if [ -f "$HOME/.codex/auth.json" ]; then _dok "codex autenticado (~/.codex/auth.json)"
-    else _dwarn "codex sem auth — rode: codex login"; fi
-    [ -f "$CODEX_CLIENT" ] && _dok "cliente app-server presente" || _dwarn "lib/codex_client.py ausente — reinstale (install.sh)"
-    if [ -S "$CODEX_SOCK" ] && codex_up; then _dok "app-server: no ar ($CODEX_SOCK)"
-    else _dwarn "app-server parado (sobe ao escolher codex em 'orchestra up')"; fi
+  echo; echo "Time deste projeto ($ORCHESTRA_PROJECT):"
+  b="$(team_field leader backend)"
+  if backend_available "$b"; then _dok "líder → $b"; else _dfail "líder → $b (não instalado)"; fi
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    b="$(team_field "$n" backend)"
+    if backend_available "$b"; then _dok "$n → $b ($(team_field "$n" role))"
+    else _dfail "$n → $b (não instalado)"; fi
+  done < <(team_names)
+
+  echo; echo "Sessão ativa:"
+  if mux_available; then
+    _dok "multiplexador $(mux_backend) no ar (sessão $(mux_session))"
+    while IFS= read -r n; do
+      [ -n "$n" ] || continue
+      if [ -n "$(mux_pane_id "$n" 2>/dev/null)" ]; then _dok "painel de $n aberto"
+      else _dwarn "painel de $n ausente — 'orchestra heal' recria"; fi
+    done < <(team_all_names)
   else
-    _dwarn "codex ausente — necessário só se for usar como coder/reviewer (https://developers.openai.com/codex/cli)"
+    _dwarn "nenhuma sessão ativa (sobe ao rodar 'orchestra up')"
   fi
 
   echo; echo "Orchestra:"
   [ -d "$ORCHESTRA_HOME" ] && _dok "instalado em $ORCHESTRA_HOME" || _dfail "instalação não encontrada em $ORCHESTRA_HOME"
-  local oself; oself="$(command -v orchestra 2>/dev/null || true)"
-  [ -n "$oself" ] && _dok "CLI no PATH — $oself" || _dwarn "comando 'orchestra' não está no PATH"
-  oc_up && _dok "servidor: no ar ($OC_URL)" || _dwarn "servidor parado (sobe ao rodar 'orchestra')"
+  p="$(command -v orchestra 2>/dev/null || true)"
+  [ -n "$p" ] && _dok "CLI no PATH — $p" || _dwarn "comando 'orchestra' não está no PATH"
 
   echo
   if [ "$fail" -gt 0 ]; then
@@ -648,7 +774,7 @@ doctor() {
   fi
 }
 
-# remove COMPLETAMENTE o Orchestra Agents (preserva zellij/claude/opencode)
+# remove COMPLETAMENTE o Orchestra Agents (preserva zellij/claude/opencode/codex)
 uninstall() {
   echo "🧹 Desinstalando Orchestra Agents..."
   teardown >/dev/null 2>&1 || true
@@ -677,5 +803,6 @@ uninstall() {
   # 4) diretórios de config, estado e instalação
   rm -rf "$HOME/.config/orchestra-agents" "$ORCHESTRA_STATE" "$ORCHESTRA_HOME"
   echo "✅ Orchestra Agents removido por completo."
-  echo "   (zellij, Claude Code e OpenCode foram preservados — são ferramentas gerais.)"
+  echo "   (o .orchestra/ dos seus projetos foi preservado — é a composição do time.)"
+  echo "   (zellij, Claude Code, OpenCode e Codex foram preservados.)"
 }

@@ -1,4 +1,6 @@
 # estado de runtime (gerado em ~/.local/state/orchestra-agents normalmente)
+# e runtime dos agentes dentro de cada projeto (o team.json É versionável)
+.orchestra/run/
 *.session
 server.log
 .run/

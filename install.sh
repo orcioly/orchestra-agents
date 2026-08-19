@@ -66,20 +66,29 @@ miss=0
 have git    || { c_err "git é necessário"; miss=1; }
 have curl   || { c_err "curl é necessário"; miss=1; }
 have python3|| { c_err "python3 é necessário"; miss=1; }
-if ! have claude; then
-  c_err "Claude Code não encontrado. Instale e configure antes:  https://docs.claude.com/claude-code"; miss=1
-fi
-if ! have opencode && [ ! -x "$HOME/.opencode/bin/opencode" ]; then
-  c_err "OpenCode não encontrado. Instale e configure antes:  https://opencode.ai"; miss=1
-fi
 [ "$miss" = 1 ] && { c_err "Resolva os itens acima e rode novamente."; exit 1; }
-c_ok "Claude Code e OpenCode presentes."
 
-# codex é OPCIONAL — só necessário se você escolher 'codex' como coder/reviewer no 'orchestra up'.
-if have codex || [ -x "$HOME/.local/bin/codex" ]; then
-  c_ok "Codex presente (opcional) — disponível como coder/reviewer."
+# Backends de agente: basta UM. Cada agente do time escolhe o seu no 'orchestra up',
+# então um time inteiro de Claude Code (ou de Codex) é perfeitamente válido.
+backends=0
+if have claude; then
+  c_ok "Claude Code presente — disponível para qualquer agente."; backends=$((backends+1))
 else
-  c_warn "Codex ausente (opcional). Instale se quiser usá-lo como worker: https://developers.openai.com/codex/cli"
+  c_warn "Claude Code ausente. Instale se quiser usá-lo: https://docs.claude.com/claude-code"
+fi
+if have opencode || [ -x "$HOME/.opencode/bin/opencode" ]; then
+  c_ok "OpenCode presente — disponível para qualquer agente."; backends=$((backends+1))
+else
+  c_warn "OpenCode ausente. Instale se quiser usá-lo: https://opencode.ai"
+fi
+if have codex || [ -x "$HOME/.local/bin/codex" ]; then
+  c_ok "Codex presente — disponível para qualquer agente."; backends=$((backends+1))
+else
+  c_warn "Codex ausente. Instale se quiser usá-lo: https://developers.openai.com/codex/cli"
+fi
+if [ "$backends" = 0 ]; then
+  c_err "Nenhum backend de agente encontrado — instale ao menos um dos acima e rode novamente."
+  exit 1
 fi
 
 # resolve onde instalar o CLI (diretório já no PATH, sempre que possível)
@@ -115,7 +124,10 @@ if [ -n "${ORCHESTRA_LOCAL_SRC:-}" ]; then
   # exclui .git (objetos read-only quebram a re-cópia e não são necessários em runtime)
   # e caches; recria o destino do zero para evitar conflitos de sobrescrita.
   rm -rf "$INSTALL_DIR"; mkdir -p "$INSTALL_DIR"
-  ( cd "$ORCHESTRA_LOCAL_SRC" && tar --exclude='./.git' --exclude='*/__pycache__' --exclude='*.pyc' -cf - . ) \
+  # '.orchestra' é ESTADO DE PROJETO (time, prompts, runtime) de quem está
+  # desenvolvendo — não pode viajar para dentro da instalação.
+  ( cd "$ORCHESTRA_LOCAL_SRC" && tar --exclude='./.git' --exclude='./.orchestra' \
+      --exclude='*/__pycache__' --exclude='*.pyc' -cf - . ) \
     | ( cd "$INSTALL_DIR" && tar -xf - )
 elif [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" fetch --depth 1 origin "$REPO_BRANCH" && git -C "$INSTALL_DIR" reset --hard "origin/$REPO_BRANCH"
@@ -158,9 +170,7 @@ else
   fi
 fi
 
-# 6) layout extra no diretório padrão do zellij (conveniência)
-mkdir -p "$HOME/.config/zellij/layouts"
-cp -f "$INSTALL_DIR/layouts/team.kdl" "$HOME/.config/zellij/layouts/orchestra.kdl" 2>/dev/null || true
+# 6) (o layout do zellij é GERADO por projeto a cada "orchestra up" — nada a copiar)
 
 # 7) agente reviewer no OpenCode — configuração AUTOMÁTICA (sem passo manual)
 OC_CFG="$(oc_config_path)"
@@ -185,8 +195,9 @@ if [ "$READY_NOW" = 1 ]; then
       cd ~/meu-projeto
       orchestra
 
-  Depois, no painel do LÍDER (Claude), apenas converse: ele delega ao
-  CODER (implementar) e ao REVISOR (revisar) automaticamente.
+  Um menu deixa você montar o time do projeto (líder + agentes, cada um em
+  claude, opencode ou codex). Depois é só conversar no painel do LÍDER: ele
+  delega aos agentes e busca os resultados automaticamente.
 
   Desinstalar tudo:  orchestra uninstall
   Docs:              $INSTALL_DIR/README.md

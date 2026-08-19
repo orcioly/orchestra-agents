@@ -2,126 +2,176 @@
 # Orchestra Agents — CLI do orquestrador
 set -uo pipefail
 ORCHESTRA_HOME="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
-# shellcheck source=/dev/null
-. "$ORCHESTRA_HOME/lib/core.sh"
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 usage() {
   cat <<'EOF'
-🎼 Orchestra Agents — orquestrador de IA (Claude líder + workers OpenCode/Codex)
+🎼 Orchestra Agents — orquestrador de IA no terminal (time de N agentes no zellij)
 
 uso:
-  orchestra up [dir]            sobe o time no zellij (LÍDER + CODER + REVISOR)
-                               no projeto 'dir' (padrão: diretório atual).
-                               PERGUNTA qual backend usar em cada papel: opencode | codex
-                               (env ORCHESTRA_CODER / ORCHESTRA_REVIEWER sobrescreve p/ CI)
-  orchestra send <papel> <txt> despacha tarefa de forma ASSÍNCRONA (não bloqueia)
-                               papel: coder | reviewer
-  orchestra result <papel>     mostra a última resposta do worker (não-bloqueante)
-  orchestra result <papel> --wait [timeout_segundos]
-                               BLOQUEIA até resposta completa (padrão 300s)
-  orchestra await <papel> [timeout_segundos]
-                               alias de 'result <papel> --wait'
-  orchestra status             estado do servidor e das sessões
-  orchestra doctor             diagnostica pré-requisitos, modelo, agente e servidor
-  orchestra down               encerra o servidor OpenCode
-  orchestra uninstall          remove o Orchestra Agents por completo
-  orchestra version            versão
+  orchestra up [dir]              sobe o time no zellij para o projeto 'dir' (padrão: atual).
+                                  Abre o menu de composição: líder + agentes, cada um
+                                  rodando claude | opencode | codex.
+  orchestra send <agente> <txt>   despacha uma tarefa (ASSÍNCRONO, não bloqueia)
+  orchestra result <agente>       última resposta do agente (não-bloqueante)
+  orchestra result <agente> --wait [timeout]
+                                  BLOQUEIA até a resposta completa (padrão 300s)
+  orchestra await <agente> [timeout]
+                                  alias de 'result <agente> --wait'
+  orchestra done <agente> <task>  (usado PELO agente) devolve a resposta, lendo stdin
+
+  orchestra agents                lista o time e o estado de cada painel
+  orchestra add <nome> [--ia claude|opencode|codex] [--role <papel>]
+                       [--prompt "<o que ele faz>"]
+                                  (--ia é a IA que roda o agente; --backend é sinônimo)
+                                  cria um agente e abre o painel na hora
+  orchestra rm <nome>             remove o agente e fecha o painel
+  orchestra leader <backend>      troca o líder (claude | opencode | codex)
+  orchestra heal                  recria painéis de agentes que morreram/foram fechados
+
+  orchestra status                estado da sessão e dos agentes
+  orchestra doctor                diagnostica pré-requisitos, backends e painéis
+  orchestra down                  encerra a sessão do time
+  orchestra uninstall             remove o Orchestra Agents por completo
+  orchestra version               versão
+
+papéis prontos: coder, reviewer, tester, docs, architect, devops
+                (qualquer outro nome vira um agente 'custom' com prompt editável
+                 em .orchestra/prompts/<nome>.md)
 
 exemplos:
   orchestra up ~/meu-projeto
   orchestra send coder    "crie um endpoint POST /users com validação"
-  orchestra send reviewer "revise as últimas mudanças e aponte bugs"
-  orchestra result coder --wait
-  orchestra await reviewer 120
+  orchestra await coder
+  orchestra add tester --backend claude --role tester
+  orchestra add gitops --backend claude --prompt "Cuida de git: commit e push, mensagens no padrão do repo. NÃO altera código."
+  orchestra leader codex
 EOF
 }
 
-# sem argumento, 'orchestra' já entra (= up no diretório atual)
+# 'up' precisa fixar o projeto ANTES de o core resolver os diretórios de runtime
 cmd="${1:-up}"; [ $# -gt 0 ] && shift
+if [ "$cmd" = up ]; then
+  proj="${1:-$PWD}"
+  proj="$(cd "$proj" 2>/dev/null && pwd)" || { echo "diretório inválido: ${1:-$PWD}"; exit 1; }
+  export ORCHESTRA_PROJECT="$proj"
+fi
+
+# shellcheck source=/dev/null
+. "$ORCHESTRA_HOME/lib/core.sh"
+
 case "$cmd" in
   up)
-    proj="${1:-$PWD}"
-    proj="$(cd "$proj" 2>/dev/null && pwd)" || { echo "diretório inválido: ${1:-$PWD}"; exit 1; }
     command -v zellij >/dev/null 2>&1 || { echo "❌ zellij não encontrado no PATH"; exit 1; }
     if [ -n "${ZELLIJ:-}" ]; then
       echo "⚠️  você já está dentro de uma sessão zellij."
       echo "    Saia para um terminal normal e rode 'orchestra' de novo (evita aninhar)."
       exit 1
     fi
-    echo "$proj" >"$ORCHESTRA_STATE/project"
-    echo "🎼 subindo Orchestra no projeto: $proj"
-    ensure_reviewer_agent   # auto-configura o agente revisor no OpenCode (idempotente)
+    printf '%s' "$ORCHESTRA_PROJECT" >"$ORCHESTRA_STATE/project"
+    mkdir -p "$ORCHESTRA_RUN_DIR"
+    # o runtime é descartável; o time (team.json/prompts) é versionável
+    printf 'run/\n' >"$ORCHESTRA_DIR/.gitignore"
+    echo "🎼 subindo Orchestra no projeto: $ORCHESTRA_PROJECT"
 
-    # escolha do backend de cada papel (opencode|codex) — menu VISUAL (setas).
-    # env ORCHESTRA_CODER/REVIEWER sobrescreve; sem tty cai no default.
-    read -r coder_backend reviewer_backend <<<"$(select_backends)"
-    printf '%s' "$coder_backend"    >"$ORCHESTRA_STATE/coder.backend"
-    printf '%s' "$reviewer_backend" >"$ORCHESTRA_STATE/reviewer.backend"
-    echo "  ✔ coder=$coder_backend · reviewer=$reviewer_backend"
-
-    # valida disponibilidade do codex se algum papel o usar
-    if [ "$coder_backend" = codex ] || [ "$reviewer_backend" = codex ]; then
-      if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/codex" ]; then
-        echo "❌ codex não encontrado no PATH — instale (https://developers.openai.com/codex/cli) ou escolha opencode"; exit 1
-      fi
+    team_ensure
+    # select_team devolve 2 quando o usuário escolhe "sair" no menu
+    select_team; sel_rc=$?
+    if [ "$sel_rc" = 2 ]; then
+      echo "  ✋ cancelado — o zellij não foi aberto."
+      exit 0
     fi
 
-    # sobe os servidores necessários
-    if [ "$coder_backend" = opencode ] || [ "$reviewer_backend" = opencode ]; then
-      printf '  ⏳ subindo servidor OpenCode...'; ensure_server \
-        && echo ' ok' || { echo; echo "❌ servidor OpenCode não subiu — veja $ORCHESTRA_STATE/server.log"; exit 1; }
-    fi
-    if [ "$coder_backend" = codex ] || [ "$reviewer_backend" = codex ]; then
-      printf '  ⏳ subindo Codex app-server...'; ensure_codex_server \
-        && echo ' ok' || { echo; echo "❌ codex app-server não subiu — veja $ORCHESTRA_STATE/codex-server.log"; exit 1; }
-    fi
+    # valida que todo backend escolhido está instalado
+    miss=0
+    for n in $(team_all_names); do
+      b="$(team_field "$n" backend)"
+      backend_available "$b" || { echo "❌ '$n' usa '$b', que não está instalado — $(backend_url "$b")"; miss=1; }
+    done
+    [ "$miss" = 0 ] || exit 1
 
-    # workers FRESCOS a cada 'up' → começa com contexto limpo
-    printf '  ⏳ preparando CODER (%s)...' "$coder_backend"
-    ensure_worker coder "CODER (executor)" fresh >/dev/null \
-      && echo ' ok' || { echo; echo "❌ falha ao preparar o coder — veja $ORCHESTRA_STATE/codex-server.log"; exit 1; }
-    printf '  ⏳ preparando REVISOR (%s)...' "$reviewer_backend"
-    ensure_worker reviewer "REVISOR (code review)" fresh >/dev/null \
-      && echo ' ok' || { echo; echo "❌ falha ao preparar o reviewer — veja $ORCHESTRA_STATE/codex-server.log"; exit 1; }
-    echo "  🎬 abrindo o zellij..."
-    exec zellij --layout "$ORCHESTRA_HOME/layouts/team.kdl"
+    # o OpenCode precisa do agente 'reviewer' configurado (idempotente)
+    for n in $(team_all_names); do
+      [ "$(team_field "$n" backend)" = opencode ] && { ensure_reviewer_agent; break; }
+    done
+
+    layout="$(generate_layout)"
+    echo "  ✔ time: $(team_all_names | tr '\n' ' ')"
+
+    # nome de sessão estável por projeto → 'orchestra up' de novo reanexa em vez de falhar
+    # printf (e não o pipe direto do basename): 'tr -c' converteria o \n final em '-',
+    # deixando o nome com hífen duplo antes do checksum.
+    sess="orchestra-$(printf '%s' "$(basename "$ORCHESTRA_PROJECT")" | tr -c 'a-zA-Z0-9_-' '-')-$(printf '%s' "$ORCHESTRA_PROJECT" | cksum | cut -d' ' -f1)"
+    printf '%s' "$sess" >"$ORCHESTRA_STATE/mux.session"
+    line="$(zellij list-sessions --no-formatting 2>/dev/null | grep -E "^${sess}( |\$)" || true)"
+    if [ -n "$line" ]; then
+      case "$line" in
+        *EXITED*) zellij delete-session --force "$sess" >/dev/null 2>&1 ;;
+        *) echo "  🔁 sessão '$sess' já está no ar — reanexando…"; exec zellij attach "$sess" ;;
+      esac
+    fi
+    echo "  🎬 abrindo o zellij…"
+    # '-n/--new-session-with-layout' e NÃO '--layout': combinado com '--session', o
+    # '--layout' significa "adicione este layout como aba à sessão EXISTENTE" e falha
+    # com "Session not found" quando ela ainda não existe. O '-n' sempre cria.
+    exec zellij -s "$sess" -n "$layout"
     ;;
-  send)     dispatch "$@" ;;
+
+  send)   dispatch "$@" ;;
+  done)   done_reply "${1:-}" "${2:-}" ;;
+
   result)
     role="${1:-}"
     if [ "$role" = "--wait" ]; then
-      # BLOCKER 2: $2 = papel, $3 = timeout (opcional)
-      role="${2:-}"; timeout="${3:-300}"
-      result_wait "$role" "$timeout"
+      result_wait "${2:-}" "${3:-$ORCHESTRA_TIMEOUT}"
     elif [ "${2:-}" = "--wait" ]; then
-      # 'result <papel> --wait [timeout]'
-      timeout="${3:-300}"
-      result_wait "$role" "$timeout"
+      result_wait "$role" "${3:-$ORCHESTRA_TIMEOUT}"
     else
       result "$role"
     fi
     ;;
+
   await)
-    role=""; timeout=300
-    for a in "$@"; do
-      case "$a" in
-        coder|reviewer) role="$a" ;;
-        *) [[ "$a" =~ ^[0-9]+$ ]] && timeout="$a" ;;  # BLOCKER 1: só dígitos puros
+    # 1º argumento = agente; 2º (opcional) = timeout, que PRECISA ser numérico —
+    # um valor inválido é erro de validação (exit 1), nunca um default silencioso.
+    role="${1:-}"; timeout="${2:-$ORCHESTRA_TIMEOUT}"
+    if [ $# -gt 2 ]; then
+      echo "uso: orchestra await <agente> [timeout_segundos]" >&2; exit 1
+    fi
+    result_wait "$role" "$timeout" "await"
+    ;;
+
+  agents|team|ls) agents_list ;;
+
+  add)
+    name="${1:-}"; [ $# -gt 0 ] && shift
+    backend=""; role=""; ptext=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --backend|-b|--ia) backend="${2:-}"; shift 2 ;;
+        --role|-r)    role="${2:-}";    shift 2 ;;
+        --prompt|-p)  ptext="${2:-}";   shift 2 ;;
+        *) echo "opção desconhecida: '$1'"; exit 1 ;;
       esac
     done
-    result_wait "${role:-${1:-}}" "$timeout" "await"
+    agent_add "$name" "$backend" "$role" "$ptext"
     ;;
-  status)   status ;;
-  doctor)   doctor ;;
-  down)     teardown ;;
+
+  rm|remove)  agent_rm "${1:-}" ;;
+  leader)     leader_set "${1:-}" ;;
+  heal)       heal ;;
+  status)     status ;;
+  doctor)     doctor ;;
+  down)       teardown ;;
+
   uninstall)
     if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then uninstall; exit 0; fi
     printf "Isso remove o Orchestra Agents POR COMPLETO. Confirmar? [y/N] "
     read -r ans </dev/tty || ans=n
     case "$ans" in y|Y|s|S) uninstall ;; *) echo "cancelado" ;; esac
     ;;
+
   version|-v|--version) echo "orchestra-agents $VERSION" ;;
   ""|help|-h|--help)    usage ;;
   *) echo "comando desconhecido: '$cmd'"; echo; usage; exit 1 ;;
