@@ -6,17 +6,17 @@
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/orcioly/orchestra-agents/pulls)
 
-Um **orquestrador de IA** para o terminal: você monta um **time de agentes** — um **líder
-(maestro)** e quantos workers quiser — e cada um roda como **TUI real**, lado a lado, dentro
+Um **orquestrador de IA** para o terminal: você monta um **time de agentes**, com um **líder
+(maestro)** e quantos workers quiser, e cada um roda como **TUI real**, lado a lado, dentro
 do **zellij**.
 
 O time é **inteiramente seu**: você escolhe quantos agentes, o nome de cada um, o que cada um
-faz (um papel pronto ou uma função que você escreve) e qual IA o roda — **Claude Code**,
+faz (um papel pronto ou uma função que você escreve) e qual IA o roda: **Claude Code**,
 **OpenCode** ou **Codex**, inclusive para o líder. Os três abaixo são só um exemplo.
 
 O líder despacha tarefas de forma **assíncrona** (não bloqueia, não queima token esperando)
 e os workers trabalham em paralelo, com tudo visível ao vivo. Trocar a IA de um agente
-não muda nada no seu fluxo — os comandos são idênticos.
+não muda nada no seu fluxo: os comandos são idênticos.
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -27,12 +27,12 @@ não muda nada no seu fluxo — os comandos são idênticos.
 │ IA à escolha │ IA à escolha │ IA à escolha │ quiser       │
 └──────────────┴──────────────┴──────────────┴──────────────┘
    nada aqui é fixo: você define quantos agentes, o nome, a função
-   e a IA (claude, opencode ou codex) de cada um — no menu, ao subir
+   e a IA (claude, opencode ou codex) de cada um, no menu, ao subir
 ```
 
 Ao rodar `orchestra`, um **menu com setas** deixa você montar o time do projeto: trocar a IA
 de cada agente, adicionar e remover agentes. A composição fica salva em
-`.orchestra/team.json`, **dentro do projeto** — e pode ser versionada com ele.
+`.orchestra/team.json`, **dentro do projeto**, e pode ser versionada com ele.
 
 ---
 
@@ -42,14 +42,14 @@ Não há servidor, porta nem daemon. Cada agente é uma **TUI local** num painel
 líder conversa com ela pelo próprio multiplexador:
 
 1. `orchestra send coder "…"` **injeta a tarefa no painel** do coder (como uma colagem) e
-   submete. Retorna na hora — o líder não fica parado.
+   submete. Retorna na hora, então o líder não fica parado.
 2. O worker trabalha **ao vivo**, na TUI, e você vê tudo acontecendo.
 3. Ao concluir, o worker executa `orchestra done coder <id>` devolvendo a resposta final.
 4. O líder pega o resultado com `orchestra await coder` (bloqueante e barato) ou
    `orchestra result coder` (não-bloqueante).
 
 Como não existe id de sessão guardado, dar `/clear`, `/new`, mover o painel ou redimensionar
-**não quebra** o despacho. E se um painel morrer, ele é **recriado automaticamente** — cada
+**não quebra** o despacho. E se um painel morrer, ele é **recriado automaticamente**: cada
 painel roda sob um supervisor que reinicia a TUI retomando a conversa anterior.
 
 ---
@@ -58,25 +58,28 @@ painel roda sob um supervisor que reinicia a TUI retomando a conversa anterior.
 
 | Requisito | Como obter |
 |-----------|-----------|
-| **Ao menos uma IA de agente** — Claude Code, OpenCode ou Codex | <https://docs.claude.com/claude-code> · <https://opencode.ai> · <https://developers.openai.com/codex/cli> |
+| **Sistema**: Linux ou macOS nativamente; Windows via WSL2 | veja [Windows (via WSL)](#windows-via-wsl) |
+| **Ao menos uma IA de agente**: Claude Code, OpenCode ou Codex | <https://docs.claude.com/claude-code> · <https://opencode.ai> · <https://developers.openai.com/codex/cli> |
 | `git`, `python3` (e `curl`, só para o instalador) | já vêm na maioria das distros |
 | **zellij** | instalado automaticamente pelo instalador |
 
 > Você só precisa das IAs que for **usar**. Um time inteiro de Claude Code funciona sem
-> OpenCode nem Codex instalados — e vice-versa. O `orchestra doctor` mostra o que falta.
+> OpenCode nem Codex instalados, e vice-versa. O `orchestra doctor` mostra o que falta.
 >
 > Se usar OpenCode, o instalador configura sozinho o agente **`reviewer`** (read-only) na sua
-> config — veja [`config/opencode.reviewer.jsonc`](config/opencode.reviewer.jsonc).
+> config. Veja [`config/opencode.reviewer.jsonc`](config/opencode.reviewer.jsonc).
 
 ---
 
 ## 🚀 Instalação
 
+### Linux e macOS
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
 ```
 
-É só isso — **nenhuma configuração manual**. O instalador:
+É só isso, sem **nenhuma configuração manual**. O instalador:
 1. confere quais IAs você tem instaladas;
 2. instala o **zellij** se faltar;
 3. coloca os arquivos em `~/.orchestra-agents`;
@@ -93,8 +96,43 @@ cd ~/meu-projeto
 orchestra          # precisa ser fora de uma sessão zellij
 ```
 
-> **Rode `orchestra` a partir de um terminal normal**, não de dentro do zellij — ele recusa
+> **Rode `orchestra` a partir de um terminal normal**, não de dentro do zellij: ele recusa
 > aninhar sessões e avisa.
+
+### Windows (via WSL)
+
+O Orchestra é escrito em bash e usa ferramentas Unix que o Prompt de Comando e o PowerShell
+não têm. Por isso, no Windows ele roda dentro do **WSL**, que é Linux de verdade. Na prática:
+você instala o WSL uma vez e, daí em diante, tudo funciona igual ao Linux.
+
+**1. Instale o WSL primeiro.** No PowerShell, **como administrador**:
+
+```powershell
+wsl --install
+```
+
+Reinicie o computador e abra o Ubuntu uma vez, para criar seu usuário.
+
+**2. Instale as IAs dentro do WSL.** No Ubuntu, instale e autentique o `claude`, o `opencode`
+ou o `codex`. As versões instaladas no Windows **não servem**, porque os painéis são processos Linux.
+
+**3. Siga os mesmos passos do Linux**, agora dentro do Ubuntu: [instalação acima](#linux-e-macos).
+
+Se preferir não entrar no WSL, dá para instalar direto do PowerShell ou do Prompt de Comando:
+
+```powershell
+wsl bash -lc "curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash"
+```
+
+**Para usar depois:** `orchestra` dentro do WSL, ou `wsl orchestra` do PowerShell/cmd, sem
+precisar entrar no Linux.
+
+> Use o **Windows Terminal** (padrão no Windows 11, e na Microsoft Store no Windows 10). Ele
+> desenha corretamente as molduras e os ícones dos painéis; a janela preta antiga do Prompt de
+> Comando, não.
+>
+> Mantenha o projeto **dentro** do WSL (`~/meu-app`). Em `/mnt/c` funciona, mas o I/O é bem
+> mais lento.
 
 ### Atualizar
 
@@ -113,8 +151,53 @@ orchestra down
 orchestra
 ```
 
-Seu time (`.orchestra/team.json`) e seus prompts continuam onde estão — a atualização não
+Seu time (`.orchestra/team.json`) e seus prompts continuam onde estão: a atualização não
 mexe neles.
+
+---
+
+## 🗑️ Desinstalação
+
+**Um comando só.** Ele faz tudo: encerra as sessões abertas (de todos os projetos), remove o
+comando `orchestra`, as linhas de `PATH` que tiver criado, o estado, o diretório de instalação
+e até o zellij, se tiver sido o instalador do Orchestra que o colocou aí.
+
+```bash
+orchestra uninstall
+```
+
+Ou, se o comando já não existir (ou você preferir):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
+```
+
+Você **não** precisa dar `orchestra down` antes, nem fechar painel nenhum.
+
+No **Windows**, é o mesmo comando dentro do WSL, ou `wsl orchestra uninstall` direto do
+PowerShell. O WSL em si não é removido: ele é seu, não do Orchestra.
+
+O que ele **preserva**, de propósito:
+
+| Preservado | Por quê |
+|------------|---------|
+| `.orchestra/` dos seus projetos | é a composição do seu time, sua e não do Orchestra |
+| Claude Code, OpenCode, Codex | ferramentas suas, usadas fora do Orchestra |
+| zellij que **você** já tinha | só é removido o que o instalador do Orchestra baixou |
+| agente `reviewer` na config do OpenCode | é uma entrada na sua config; o caminho é mostrado no fim |
+
+> Se for **reinstalar na mesma janela** do terminal, limpe o cache de comandos do shell:
+> `hash -r` no bash, `rehash` no zsh. Sem isso ele ainda aponta para o binário removido e você
+> vê um erro confuso. O próprio desinstalador lembra disso no fim.
+
+### Reinstalar do zero
+
+```bash
+orchestra uninstall
+hash -r 2>/dev/null || rehash 2>/dev/null || true
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
+orchestra doctor
+```
 
 ---
 
@@ -146,11 +229,11 @@ orchestra ~/outro-app     # ou aponte o projeto direto, sem trocar de pasta
    Enter abre o time no zellij · q sai sem abrir
 ```
 
-**"IA" é qual CLI roda o agente** (Claude Code, OpenCode ou Codex) — não tem relação com
+**"IA" é qual CLI roda o agente** (Claude Code, OpenCode ou Codex). Não tem relação com
 backend/frontend de software. O que o agente *faz* é a coluna **O QUE FAZ**, definida pelo
 papel ou pelo texto que você escreve.
 
-Para desistir: `q`, `Esc` ou a linha **sair** — nada é aberto e as trocas feitas na tela são
+Para desistir: `q`, `Esc` ou a linha **sair**. Nada é aberto e as trocas feitas na tela são
 descartadas.
 
 O time começa com **líder + coder + reviewer** e você ajusta à vontade. A escolha vale para
@@ -162,7 +245,7 @@ O time começa com **líder + coder + reviewer** e você ajusta à vontade. A es
 > ORCHESTRA_TEAM="leader=claude,coder=codex,reviewer=opencode,tester=claude,docs=opencode,architect=claude,devops=codex" orchestra
 > ```
 >
-> Sintaxe: `nome=ia` ou `nome=ia:papel` — o sufixo deixa um nome livre herdar um
+> Sintaxe: `nome=ia` ou `nome=ia:papel`. O sufixo deixa um nome livre herdar um
 > preset (`qa=claude:tester`). Nome sem preset e sem sufixo vira `custom`, com prompt
 > editável em `.orchestra/prompts/<nome>.md`.
 
@@ -194,7 +277,7 @@ orchestra rm gitops
 
 Sem `--prompt`, o agente custom nasce com um arquivo em `.orchestra/prompts/<nome>.md`
 para você escrever depois. No menu, o `a` pergunta a mesma coisa: **nome → função → IA →
-o que ele faz**. A IA nunca é adivinhada pelo nome — é sempre escolha sua.
+o que ele faz**. A IA nunca é adivinhada pelo nome: é sempre escolha sua.
 
 O nome vira argumento de comando (`orchestra send deploy-prod "…"`), então segue uma regra
 estrita: **minúsculas, sem espaços e sem acentos**, começando por letra, aceitando `-` e `_`
@@ -202,14 +285,14 @@ estrita: **minúsculas, sem espaços e sem acentos**, começando por letra, acei
 exatamente o que está errado.
 
 O nome fica em minúsculas nos comandos (`orchestra send gitops "…"`) e aparece em
-**MAIÚSCULAS** no painel, com o ícone do papel — igual aos demais: `✨ GITOPS`.
+**MAIÚSCULAS** no painel, com o ícone do papel, igual aos demais: `✨ GITOPS`.
 
 Todo agente, de qualquer IA, recebe automaticamente o mesmo **protocolo**: obedecer o líder e
 devolver a resposta com `orchestra done`. Não há agente que fique de fora.
 
 ### O nome não define a função
 
-Criar um agente chamado `pr` não o torna responsável por Pull Requests — o nome é só o
+Criar um agente chamado `pr` não o torna responsável por Pull Requests. O nome é só o
 endereço do comando (`orchestra send pr "…"`). Quem ensina a função é a descrição:
 
 ```bash
@@ -223,10 +306,10 @@ Isso alimenta **os dois lados**:
 - o líder recebe a mesma linha no roster do time, então sabe **quando** acionar aquele agente:
 
 ```
-- ✨ PR (claude) — Abre e atualiza Pull Requests no GitHub via gh. Não implementa features.
+- ✨ PR (claude): Abre e atualiza Pull Requests no GitHub via gh. Não implementa features.
 ```
 
-Sem descrição, o agente nasce genérico e o líder o vê apenas como "agente customizado" — não
+Sem descrição, o agente nasce genérico e o líder o vê apenas como "agente customizado", então não
 vai saber rotear nada para ele. Por isso o `add` avisa quando isso acontece, e o menu explica
 antes de perguntar.
 
@@ -247,17 +330,17 @@ Função: Abre e atualiza Pull Requests no GitHub via gh.
 Delegue com: orchestra send pr "<tarefa>"   ·   resultado: orchestra await pr
 ```
 
-Vale também para o `orchestra rm` — o líder é avisado de que aquele agente saiu e para de
+Vale também para o `orchestra rm`: o líder é avisado de que aquele agente saiu e para de
 delegar para ele. Se o comando partiu do próprio painel do líder, nada é injetado (ele já
 sabe: foi ele quem rodou).
 
-O painel do agente novo abre **na mesma tela dos outros**, dividindo o espaço — nunca numa
+O painel do agente novo abre **na mesma tela dos outros**, dividindo o espaço, nunca numa
 janela flutuante por cima, nunca em outra aba. Mesmo que você esteja com o foco em outra aba
 do zellij na hora, ele nasce junto do time.
 
 ### Modo natural (recomendado)
 
-Depois de subir, **apenas converse com o líder** — ele já sobe conhecendo o time deste
+Depois de subir, **apenas converse com o líder**. Ele já sobe conhecendo o time deste
 projeto e delega sozinho:
 
 ```
@@ -310,17 +393,17 @@ orchestra down                  # encerra a sessão
 ## 🩺 Diagnóstico (`orchestra doctor`)
 
 ```text
-🩺 Orchestra Agents — diagnóstico
+🩺 Orchestra Agents: diagnóstico
 
 Base:
-  ✔ zellij — /home/voce/.local/bin/zellij
-  ✔ git — /usr/bin/git
-  ✔ python3 — /usr/bin/python3
+  ✔ zellij: /home/voce/.local/bin/zellij
+  ✔ git: /usr/bin/git
+  ✔ python3: /usr/bin/python3
 
 Backends de agente:
   ✔ claude disponível
   ✔ opencode disponível
-  ! codex ausente — https://developers.openai.com/codex/cli
+  ! codex ausente, instale em: https://developers.openai.com/codex/cli
 
 Time deste projeto (/home/voce/meu-projeto):
   ✔ líder → claude
@@ -331,11 +414,11 @@ Sessão ativa:
   ✔ multiplexador zellij no ar (sessão orchestra-meu-projeto-284…)
   ✔ painel de leader aberto
   ✔ painel de coder aberto
-  ! painel de reviewer ausente — 'orchestra heal' recria
+  ! painel de reviewer ausente, 'orchestra heal' recria
 
 Orchestra:
   ✔ instalado em /home/voce/.orchestra-agents
-  ✔ CLI no PATH — /home/voce/.local/bin/orchestra
+  ✔ CLI no PATH: /home/voce/.local/bin/orchestra
 
 Resumo: o essencial está ok, com 2 aviso(s).
 ```
@@ -343,8 +426,8 @@ Resumo: o essencial está ok, com 2 aviso(s).
 | Símbolo | Significado |
 |---------|-------------|
 | ✔ | OK |
-| ! | aviso — funciona, mas vale ajustar |
-| ✖ | falha — algo essencial está faltando |
+| ! | aviso: funciona, mas vale ajustar |
+| ✖ | falha: algo essencial está faltando |
 
 Sai com **`0`** quando não há falhas (mesmo com avisos) e **`1`** quando há ao menos um ✖.
 
@@ -354,7 +437,7 @@ Sai com **`0`** quando não há falhas (mesmo com avisos) e **`1`** quando há a
 
 ### Modelos (importante)
 
-O Orchestra **usa os modelos que você já tem configurados** — não força nenhum. Configurou no
+O Orchestra **usa os modelos que você já tem configurados** e não força nenhum. Configurou no
 Claude Code / OpenCode / Codex → é o que o Orchestra usa. Os overrides abaixo existem só se
 você quiser fixar algo.
 
@@ -378,8 +461,8 @@ Por ambiente ou em `~/.config/orchestra-agents/config` (formato shell):
 Exemplo de `~/.config/orchestra-agents/config`:
 
 ```sh
-ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # opcional — fixa o modelo dos agentes OpenCode
-ORCHESTRA_TIMEOUT=600                           # opcional — tarefas longas
+ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # opcional: fixa o modelo dos agentes OpenCode
+ORCHESTRA_TIMEOUT=600                           # opcional: tarefas longas
 ```
 
 ### O que fica dentro do projeto
@@ -389,48 +472,6 @@ meu-projeto/.orchestra/
 ├── team.json         # composição do time (VERSIONÁVEL)
 ├── prompts/<nome>.md # prompts dos agentes custom (VERSIONÁVEL)
 └── run/              # runtime descartável (gitignorado automaticamente)
-```
-
----
-
-## 🗑️ Desinstalação
-
-**Um comando só.** Ele faz tudo: encerra as sessões abertas (de todos os projetos), remove o
-comando `orchestra`, as linhas de `PATH` que tiver criado, o estado, o diretório de instalação
-e até o zellij — se tiver sido o instalador do Orchestra que o colocou aí.
-
-```bash
-orchestra uninstall
-```
-
-Ou, se o comando já não existir (ou você preferir):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
-```
-
-Você **não** precisa dar `orchestra down` antes, nem fechar painel nenhum.
-
-O que ele **preserva**, de propósito:
-
-| Preservado | Por quê |
-|------------|---------|
-| `.orchestra/` dos seus projetos | é a composição do seu time, sua — não do Orchestra |
-| Claude Code, OpenCode, Codex | ferramentas suas, usadas fora do Orchestra |
-| zellij que **você** já tinha | só é removido o que o instalador do Orchestra baixou |
-| agente `reviewer` na config do OpenCode | é uma entrada na sua config; o caminho é mostrado no fim |
-
-> Se for **reinstalar na mesma janela** do terminal, limpe o cache de comandos do shell —
-> `hash -r` no bash, `rehash` no zsh. Sem isso ele ainda aponta para o binário removido e você
-> vê um erro confuso. O próprio desinstalador lembra disso no fim.
-
-### Reinstalar do zero
-
-```bash
-orchestra uninstall
-hash -r 2>/dev/null || rehash 2>/dev/null || true
-curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
-orchestra doctor
 ```
 
 ---
@@ -467,7 +508,7 @@ orchestra-agents/
 
 Cobre sintaxe de todos os scripts, o modelo do time, composição por env, `add`/`rm`, prompts
 de papel e roster, o ciclo completo `send → done → await`, exit codes, o layout gerado e o
-`doctor`. Roda com `ORCHESTRA_MUX=stub` num projeto temporário — **não** encosta numa sessão
+`doctor`. Roda com `ORCHESTRA_MUX=stub` num projeto temporário, e **não** encosta numa sessão
 real nem chama modelo, então serve tanto local quanto no CI.
 
 **CI (GitHub Actions):** [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) roda o
