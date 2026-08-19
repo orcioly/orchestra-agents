@@ -14,6 +14,17 @@ export ORCHESTRA_STATE="$(mktemp -d)"
 export ORCHESTRA_PROJECT="$(mktemp -d)"
 export ORCHESTRA_MUX=stub
 ORCH="$ROOT/bin/orchestra"
+
+# Backends FALSOS no PATH. 'agent_add' recusa uma IA que não esteja instalada, então
+# sem isto a suíte só passa em máquina que tenha claude+opencode+codex — foi o que
+# derrubou o CI. Os stubs nunca são executados: os testes rodam com o multiplexador
+# 'stub' e nenhum painel real sobe.
+FAKEBIN="$ORCHESTRA_STATE/fakebin"; mkdir -p "$FAKEBIN"
+for b in claude opencode codex; do
+  printf '#!/bin/sh\necho "stub de teste: %s"\n' "$b" >"$FAKEBIN/$b"
+  chmod +x "$FAKEBIN/$b"
+done
+export PATH="$FAKEBIN:$PATH"
 trap 'rm -rf "$ORCHESTRA_STATE" "$ORCHESTRA_PROJECT"' EXIT
 
 pass=0; fail=0; skip=0
