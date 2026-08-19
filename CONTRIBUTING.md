@@ -4,8 +4,9 @@ Obrigado pelo interesse em contribuir! 🎼 Issues e pull requests são bem-vind
 
 ## 🧰 Pré-requisitos
 
-- **Claude Code** e **OpenCode** instalados e configurados (veja o [README](README.md#-pré-requisitos))
-- **zellij**, `git`, `python3`, `curl`
+- Ao menos um backend de agente — **Claude Code**, **OpenCode** ou **Codex** (veja os
+  [pré-requisitos](README.md#-pré-requisitos)). Para rodar os testes, nenhum é necessário.
+- **zellij**, `git`, `python3` (e `curl` para rodar o instalador)
 - `bash` (os scripts usam `#!/usr/bin/env bash`)
 
 ## 🛠️ Setup de desenvolvimento
@@ -19,18 +20,19 @@ cd orchestra-agents
 ORCHESTRA_LOCAL_SRC="$PWD" bash install.sh
 ```
 
-Para iterar, edite os arquivos no repositório e rode `ORCHESTRA_LOCAL_SRC="$PWD" bash install.sh` de novo para sincronizar a instalação em `~/.orchestra-agents`.
+Para iterar, edite os arquivos no repositório e rode `ORCHESTRA_LOCAL_SRC="$PWD" bash install.sh` de novo para sincronizar a instalação em `~/.orchestra-agents`. O modo dev copia o working tree inteiro (menos `.git`, `.orchestra` e caches) e **recria** o diretório de instalação, então arquivos removidos no repositório somem da instalação também.
+
+Depois de sincronizar, lembre que **painéis já abertos seguem com o código antigo**: encerre com `orchestra down` e suba de novo para testar as mudanças.
 
 ## ✅ Rodando os testes
 
 Sempre rode o smoke test antes de abrir um PR:
 
 ```bash
-./tests/smoke.sh                 # completo (precisa de OpenCode autenticado)
-SKIP_DISPATCH=1 ./tests/smoke.sh # rápido: só sintaxe + doctor
+./tests/smoke.sh
 ```
 
-Ele valida sintaxe (`bash -n`), o `orchestra doctor` e um despacho async real. O CI (GitHub Actions) roda automaticamente a cada push/PR na `main`.
+Ele cobre sintaxe (`bash -n`), o modelo do time, composição por env, `add`/`rm`, prompts de papel, o ciclo completo `send → done → await`, exit codes, o layout gerado e o `doctor`. Roda com `ORCHESTRA_MUX=stub` num projeto temporário — não precisa de zellij nem de backend autenticado, e não encosta numa sessão real. O CI (GitHub Actions) roda automaticamente a cada push/PR na `main`.
 
 ## 🎨 Estilo de código
 
@@ -38,7 +40,8 @@ Ele valida sintaxe (`bash -n`), o `orchestra doctor` e um despacho async real. O
 - Garanta que passa em `bash -n` e, de preferência, em `shellcheck -S warning`.
 - Use aspas em variáveis (`"$var"`), prefira `[ ... ]`/`case`, e funções pequenas e nomeadas.
 - Mantenha a mesma densidade de comentários e idioma das mensagens já existentes (mensagens ao usuário em PT-BR).
-- Não introduza dependências além de `bash`, `python3`, `curl`, `git` e as ferramentas já usadas (`opencode`, `zellij`, `claude`).
+- Não introduza dependências além de `bash`, `python3`, `git` e as ferramentas já usadas (`zellij`, `claude`, `opencode`, `codex`).
+- Todo acesso ao multiplexador passa por `lib/mux.sh` — não chame `zellij` direto em outro arquivo.
 
 ## 📝 Mensagens de commit
 
