@@ -14,8 +14,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run smoke test (syntax; doctor/dispatch auto-skip without the tools)
-        run: SKIP_DISPATCH=1 bash tests/smoke.sh
+      - name: Run smoke test (mux stub + fake backends: no zellij or AI CLI needed)
+        run: bash tests/smoke.sh
 
       - name: ShellCheck (informational)
         continue-on-error: true
