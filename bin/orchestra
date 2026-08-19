@@ -10,9 +10,9 @@ usage() {
 🎼 Orchestra Agents — orquestrador de IA no terminal (time de N agentes no zellij)
 
 uso:
-  orchestra up [dir]              sobe o time no zellij para o projeto 'dir' (padrão: atual).
-                                  Abre o menu de composição: líder + agentes, cada um
-                                  rodando claude | opencode | codex.
+  orchestra [dir]                 sobe o time no zellij (padrão: diretório atual) e abre o
+                                  menu de composição: líder + agentes, cada um rodando
+                                  claude | opencode | codex.
   orchestra send <agente> <txt>   despacha uma tarefa (ASSÍNCRONO, não bloqueia)
   orchestra result <agente>       última resposta do agente (não-bloqueante)
   orchestra result <agente> --wait [timeout]
@@ -41,7 +41,8 @@ papéis prontos: coder, reviewer, tester, docs, architect, devops
                  em .orchestra/prompts/<nome>.md)
 
 exemplos:
-  orchestra up ~/meu-projeto
+  orchestra
+  orchestra ~/meu-projeto
   orchestra send coder    "crie um endpoint POST /users com validação"
   orchestra await coder
   orchestra add tester --backend claude --role tester
@@ -50,19 +51,37 @@ exemplos:
 EOF
 }
 
-# 'up' precisa fixar o projeto ANTES de o core resolver os diretórios de runtime
-cmd="${1:-up}"; [ $# -gt 0 ] && shift
+# Subir o time é a ação PADRÃO: 'orchestra' (aqui) ou 'orchestra <dir>' (lá).
+# Não existe subcomando para isso — 'orchestra up' era redundante e confundia.
+# Continua aceito, sem estar documentado, para não quebrar quem já o usava.
+cmd="${1:-}"; [ $# -gt 0 ] && shift
 if [ "$cmd" = up ]; then
-  proj="${1:-$PWD}"
-  proj="$(cd "$proj" 2>/dev/null && pwd)" || { echo "diretório inválido: ${1:-$PWD}"; exit 1; }
-  export ORCHESTRA_PROJECT="$proj"
+  echo "ℹ️  o 'up' não é mais necessário — basta 'orchestra' (ou 'orchestra <dir>')."
+  cmd="${1:-}"; [ $# -gt 0 ] && shift
 fi
+case "$cmd" in
+  send|done|result|await|agents|team|ls|add|rm|remove|leader|heal|status|doctor|down|uninstall|version|-v|--version|help|-h|--help) ;;
+  *)
+    # vazio ou um diretório existente => subir o time (fixa o projeto ANTES do core,
+    # que resolve os diretórios de runtime a partir dele)
+    if [ -z "$cmd" ] || [ -d "$cmd" ]; then
+      proj="${cmd:-$PWD}"
+      proj="$(cd "$proj" 2>/dev/null && pwd)" || { echo "❌ diretório inválido: '$cmd'"; exit 1; }
+      export ORCHESTRA_PROJECT="$proj"
+      cmd=__subir
+    else
+      # parece caminho e não existe: dizer isso, em vez de "comando desconhecido"
+      case "$cmd" in
+        /*|./*|../*|~*|*/*) echo "❌ diretório não encontrado: '$cmd'" >&2; exit 1 ;;
+      esac
+    fi ;;
+esac
 
 # shellcheck source=/dev/null
 . "$ORCHESTRA_HOME/lib/core.sh"
 
 case "$cmd" in
-  up)
+  __subir)
     command -v zellij >/dev/null 2>&1 || { echo "❌ zellij não encontrado no PATH"; exit 1; }
     if [ -n "${ZELLIJ:-}" ]; then
       echo "⚠️  você já está dentro de uma sessão zellij."
@@ -99,7 +118,7 @@ case "$cmd" in
     layout="$(generate_layout)"
     echo "  ✔ time: $(team_all_names | tr '\n' ' ')"
 
-    # nome de sessão estável por projeto → 'orchestra up' de novo reanexa em vez de falhar
+    # nome de sessão estável por projeto → rodar 'orchestra' de novo reanexa em vez de falhar
     # printf (e não o pipe direto do basename): 'tr -c' converteria o \n final em '-',
     # deixando o nome com hífen duplo antes do checksum.
     sess="orchestra-$(printf '%s' "$(basename "$ORCHESTRA_PROJECT")" | tr -c 'a-zA-Z0-9_-' '-')-$(printf '%s' "$ORCHESTRA_PROJECT" | cksum | cut -d' ' -f1)"

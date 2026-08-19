@@ -180,7 +180,7 @@ _pane_for() { # $1 agente  → ecoa pane-id
   local agent="$1" pane
   pane="$(mux_pane_id "$agent" 2>/dev/null)"
   if [ -n "$pane" ]; then echo "$pane"; return 0; fi
-  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra up'" >&2; return 1; }
+  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra'" >&2; return 1; }
   echo "⚠️  painel de '$agent' não está aberto — recriando…" >&2
   pane="$(mux_new_pane "$agent" "$ORCHESTRA_PROJECT")" || {
     echo "❌ não consegui recriar o painel de '$agent'" >&2; return 1; }
@@ -370,7 +370,7 @@ _resolve_role() { # $1 nome  [$2 role desejado]  [$3 texto do prompt]
 
 # Avisa o LÍDER, AO VIVO, que o time mudou — injetando a nota no painel dele.
 # Sem isto o líder só conhece o time montado quando o painel dele subiu, e um agente
-# criado depois seria ignorado até o próximo 'orchestra up'.
+# criado depois seria ignorado até o próximo 'orchestra'.
 notify_leader() { # $1 texto
   local pane self
   mux_available || return 0
@@ -428,7 +428,7 @@ agent_add() { # $1 nome  [$2 backend]  [$3 role]  [$4 texto do prompt]
   if mux_available; then
     mux_new_pane "$name" "$ORCHESTRA_PROJECT" >/dev/null && echo "  🎬 painel aberto"
   else
-    echo "  (sem multiplexador ativo — o painel abre no próximo 'orchestra up')"
+    echo "  (sem multiplexador ativo — o painel abre no próximo 'orchestra')"
   fi
   notify_leader "$(cat <<EOF
 [ORCHESTRA] O time mudou: o agente '$name' entrou agora ($backend).
@@ -457,7 +457,7 @@ agent_rm() { # $1 nome
 # recria os painéis de agentes cujo painel morreu/foi fechado
 heal() {
   team_ensure
-  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra up'" >&2; return 1; }
+  mux_available || { echo "❌ multiplexador indisponível — rode 'orchestra'" >&2; return 1; }
   local n missing=0
   while IFS= read -r n; do
     [ -n "$n" ] || continue
@@ -481,7 +481,7 @@ leader_set() { # $1 backend
   pane="$(mux_pane_id leader 2>/dev/null)"
   if [ -n "$pane" ]; then
     echo "  ⚠️  o painel do líder ainda roda o backend anterior."
-    echo "     Feche-o (Ctrl-C durante a contagem) ou rode 'orchestra up' de novo para aplicar."
+    echo "     Feche-o (Ctrl-C durante a contagem) ou rode 'orchestra' de novo para aplicar."
   fi
 }
 
@@ -489,10 +489,24 @@ status() {
   team_ensure
   local s; s="$(mux_session 2>/dev/null)"
   if mux_available; then echo "🟢 multiplexador: $(mux_backend) (sessão ${s:-?})"
-  else echo "⚪ multiplexador: fora do ar (rode 'orchestra up')"; fi
+  else echo "⚪ multiplexador: fora do ar (rode 'orchestra')"; fi
   echo "   projeto: $ORCHESTRA_PROJECT"
   echo "   time:    $(team_file)"
   agents_list
+}
+
+# Encerra TODAS as sessões do Orchestra, de todos os projetos. O 'teardown' cuida
+# só da sessão registrada no estado; quem tem vários projetos abertos deixaria as
+# outras para trás — e o usuário não tem como saber disso ao desinstalar.
+kill_all_sessions() {
+  command -v zellij >/dev/null 2>&1 || return 0
+  local s n=0
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    zellij delete-session --force "$s" >/dev/null 2>&1 && { echo "  🛑 sessão '$s' encerrada"; n=$((n+1)); }
+  done < <(zellij list-sessions --no-formatting 2>/dev/null | awk '{print $1}' | grep '^orchestra-' || true)
+  [ "$n" = 0 ] && echo "  (nenhuma sessão do Orchestra estava aberta)"
+  return 0
 }
 
 teardown() {
@@ -756,7 +770,7 @@ doctor() {
       else _dwarn "painel de $n ausente — 'orchestra heal' recria"; fi
     done < <(team_all_names)
   else
-    _dwarn "nenhuma sessão ativa (sobe ao rodar 'orchestra up')"
+    _dwarn "nenhuma sessão ativa (sobe ao rodar 'orchestra')"
   fi
 
   echo; echo "Orchestra:"
@@ -777,7 +791,7 @@ doctor() {
 # remove COMPLETAMENTE o Orchestra Agents (preserva zellij/claude/opencode/codex)
 uninstall() {
   echo "🧹 Desinstalando Orchestra Agents..."
-  teardown >/dev/null 2>&1 || true
+  kill_all_sessions
   # 1) symlink(s) do CLI no PATH (+ o local registrado na instalação)
   local d tgt bindir rc tmp IFSorig
   bindir="$(cat "$ORCHESTRA_STATE/bindir" 2>/dev/null || true)"
@@ -798,11 +812,28 @@ uninstall() {
       && mv "$tmp" "$rc" && echo "  PATH removido de $rc"
   done
   rm -f "$HOME/.config/fish/conf.d/orchestra.fish"
-  # 3) layout do zellij
+  # 3) zellij — só se foi o instalador do Orchestra que o colocou aqui
+  local zj; zj="$(cat "$ORCHESTRA_STATE/zellij.ours" 2>/dev/null || true)"
+  if [ -n "$zj" ] && [ -f "$zj" ]; then
+    rm -f "$zj" && echo "  removido $zj (tinha sido instalado pelo Orchestra)"
+  elif command -v zellij >/dev/null 2>&1; then
+    echo "  zellij preservado (já existia antes do Orchestra)"
+  fi
+
+  # 4) layout do zellij
   rm -f "$HOME/.config/zellij/layouts/orchestra.kdl"
-  # 4) diretórios de config, estado e instalação
+  # 5) diretórios de config, estado e instalação
   rm -rf "$HOME/.config/orchestra-agents" "$ORCHESTRA_STATE" "$ORCHESTRA_HOME"
   echo "✅ Orchestra Agents removido por completo."
-  echo "   (o .orchestra/ dos seus projetos foi preservado — é a composição do time.)"
-  echo "   (zellij, Claude Code, OpenCode e Codex foram preservados.)"
+  echo
+  echo "   Preservado de propósito:"
+  echo "     · o .orchestra/ dos seus projetos (é a composição do time, sua)"
+  echo "     · Claude Code, OpenCode e Codex (ferramentas suas, não do Orchestra)"
+  echo "     · o agente 'reviewer' na config do OpenCode — remova à mão se quiser:"
+  echo "       $(oc_config_path)"
+  # o shell guarda em cache o caminho do comando removido; sem isto, um 'orchestra'
+  # logo em seguida falha com uma mensagem confusa em vez de 'command not found'.
+  echo
+  echo "   Se for reinstalar nesta mesma janela, limpe o cache de comandos antes:"
+  echo "     hash -r    (bash)     ·     rehash    (zsh)"
 }

@@ -8,25 +8,30 @@
 
 Um **orquestrador de IA** para o terminal: você monta um **time de agentes** — um **líder
 (maestro)** e quantos workers quiser — e cada um roda como **TUI real**, lado a lado, dentro
-do **zellij**. Para cada agente você escolhe o backend: **Claude Code**, **OpenCode** ou
-**Codex**. Inclusive para o líder.
+do **zellij**.
+
+O time é **inteiramente seu**: você escolhe quantos agentes, o nome de cada um, o que cada um
+faz (um papel pronto ou uma função que você escreve) e qual IA o roda — **Claude Code**,
+**OpenCode** ou **Codex**, inclusive para o líder. Os três abaixo são só um exemplo.
 
 O líder despacha tarefas de forma **assíncrona** (não bloqueia, não queima token esperando)
-e os workers trabalham em paralelo, com tudo visível ao vivo. Trocar o backend de um agente
+e os workers trabalham em paralelo, com tudo visível ao vivo. Trocar a IA de um agente
 não muda nada no seu fluxo — os comandos são idênticos.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│         🎼 LÍDER (claude | opencode | codex)                │
-├────────────────────┬────────────────────┬───────────────────┤
-│  🛠️ CODER          │  🔍 REVIEWER       │  🧪 TESTER        │
-│  claude            │  opencode          │  codex            │
-└────────────────────┴────────────────────┴───────────────────┘
-                      zellij — TUIs locais
+┌───────────────────────────────────────────────────────────┐
+│ 🎼 LÍDER                    a IA é sua escolha            │
+├──────────────┬──────────────┬──────────────┬──────────────┤
+│ 🔧 CODER     │ 🔍 REVIEWER  │ ✨ PR        │    +         │
+│ papel pronto │ papel pronto │ função sua   │ quantos você │
+│ IA à escolha │ IA à escolha │ IA à escolha │ quiser       │
+└──────────────┴──────────────┴──────────────┴──────────────┘
+   nada aqui é fixo: você define quantos agentes, o nome, a função
+   e a IA (claude, opencode ou codex) de cada um — no menu, ao subir
 ```
 
-Ao rodar `orchestra up`, um **menu com setas** deixa você montar o time do projeto: trocar o
-backend de cada agente, adicionar e remover agentes. A composição fica salva em
+Ao rodar `orchestra`, um **menu com setas** deixa você montar o time do projeto: trocar a IA
+de cada agente, adicionar e remover agentes. A composição fica salva em
 `.orchestra/team.json`, **dentro do projeto** — e pode ser versionada com ele.
 
 ---
@@ -53,11 +58,11 @@ painel roda sob um supervisor que reinicia a TUI retomando a conversa anterior.
 
 | Requisito | Como obter |
 |-----------|-----------|
-| **Ao menos um backend de agente** — Claude Code, OpenCode ou Codex | <https://docs.claude.com/claude-code> · <https://opencode.ai> · <https://developers.openai.com/codex/cli> |
+| **Ao menos uma IA de agente** — Claude Code, OpenCode ou Codex | <https://docs.claude.com/claude-code> · <https://opencode.ai> · <https://developers.openai.com/codex/cli> |
 | `git`, `python3` (e `curl`, só para o instalador) | já vêm na maioria das distros |
 | **zellij** | instalado automaticamente pelo instalador |
 
-> Você só precisa dos backends que for **usar**. Um time inteiro de Claude Code funciona sem
+> Você só precisa das IAs que for **usar**. Um time inteiro de Claude Code funciona sem
 > OpenCode nem Codex instalados — e vice-versa. O `orchestra doctor` mostra o que falta.
 >
 > Se usar OpenCode, o instalador configura sozinho o agente **`reviewer`** (read-only) na sua
@@ -72,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/insta
 ```
 
 É só isso — **nenhuma configuração manual**. O instalador:
-1. confere os backends disponíveis;
+1. confere quais IAs você tem instaladas;
 2. instala o **zellij** se faltar;
 3. coloca os arquivos em `~/.orchestra-agents`;
 4. instala o comando **`orchestra`** num diretório que **já está no seu `PATH`** (o mesmo do
@@ -116,8 +121,10 @@ mexe neles.
 ## 🎬 Uso
 
 ```bash
-cd ~/meu-projeto   # qualquer projeto, qualquer pasta
-orchestra          # monta o time e abre o zellij
+cd ~/meu-projeto
+orchestra                 # monta o time e abre o zellij
+
+orchestra ~/outro-app     # ou aponte o projeto direto, sem trocar de pasta
 ```
 
 ### O menu do time
@@ -152,10 +159,10 @@ O time começa com **líder + coder + reviewer** e você ajusta à vontade. A es
 > **Time inteiro num comando** (útil em projeto novo, e para pular o menu em CI):
 >
 > ```bash
-> ORCHESTRA_TEAM="leader=claude,coder=codex,reviewer=opencode,tester=claude,docs=opencode,architect=claude,devops=codex" orchestra up
+> ORCHESTRA_TEAM="leader=claude,coder=codex,reviewer=opencode,tester=claude,docs=opencode,architect=claude,devops=codex" orchestra
 > ```
 >
-> Sintaxe: `nome=backend` ou `nome=backend:papel` — o sufixo deixa um nome livre herdar um
+> Sintaxe: `nome=ia` ou `nome=ia:papel` — o sufixo deixa um nome livre herdar um
 > preset (`qa=claude:tester`). Nome sem preset e sem sufixo vira `custom`, com prompt
 > editável em `.orchestra/prompts/<nome>.md`.
 
@@ -165,21 +172,21 @@ Cada agente tem um **papel**, que define seu prompt de sistema:
 
 | Papel | | O que faz |
 |-------|---|-----------|
-| `coder` | 🛠️ | implementa código |
+| `coder` | 🔧 | implementa código |
 | `reviewer` | 🔍 | code review (read-only, por disciplina de prompt) |
 | `tester` | 🧪 | escreve e roda testes |
 | `docs` | 📚 | documentação e READMEs |
-| `architect` | 🏛️ | arquitetura e decisões de design |
+| `architect` | 📐 | arquitetura e decisões de design |
 | `devops` | 🚀 | build, CI/CD e infraestrutura |
 
 Qualquer outro nome vira um agente **`custom`**: você define o que ele faz, na hora.
 
 ```bash
 # papel pronto
-orchestra add tester --backend claude --role tester
+orchestra add tester --ia claude --role tester
 
 # função sua, escrita na criação
-orchestra add gitops --backend claude \
+orchestra add gitops --ia claude \
   --prompt "Cuida só de git: commit e push no padrão do repo. NUNCA edita código."
 
 orchestra rm gitops
@@ -276,20 +283,20 @@ orchestra down                  # encerra a sessão
 
 | Comando | Descrição |
 |---------|-----------|
-| `orchestra` | Atalho para `orchestra up` no diretório atual |
-| `orchestra up [dir]` | Monta o time e abre o zellij no projeto `dir` |
+| `orchestra` | Monta o time e abre o zellij no diretório atual |
+| `orchestra <dir>` | O mesmo, para outro projeto: `orchestra ~/meu-app` |
 | `orchestra send <agente> "<tarefa>"` | Despacha tarefa **assíncrona** |
 | `orchestra result <agente>` | Última resposta do agente (não-bloqueante) |
 | `orchestra result <agente> --wait [s]` | Bloqueia até a resposta completa (padrão: 300s) |
 | `orchestra await <agente> [s]` | Alias de `result --wait` |
 | `orchestra done <agente> <task>` | *(usado pelo agente)* devolve a resposta, lendo stdin |
 | `orchestra agents` | Lista o time e o estado de cada painel |
-| `orchestra add <nome> [--backend b] [--role r] [--prompt "…"]` | Cria um agente e abre o painel |
+| `orchestra add <nome> --ia <ia> [--role r] [--prompt "…"]` | Cria um agente e abre o painel |
 | `orchestra rm <nome>` | Remove o agente e fecha o painel |
-| `orchestra leader <backend>` | Troca o backend do líder |
+| `orchestra leader <ia>` | Troca a IA do líder |
 | `orchestra heal` | Recria painéis que morreram ou foram fechados |
 | `orchestra status` | Estado da sessão e dos agentes |
-| `orchestra doctor` | Diagnostica pré-requisitos, backends e painéis |
+| `orchestra doctor` | Diagnostica pré-requisitos, IAs e painéis |
 | `orchestra down` | Encerra a sessão do time |
 | `orchestra uninstall` | Remove o Orchestra Agents por completo |
 | `orchestra version` | Versão |
@@ -358,7 +365,7 @@ Por ambiente ou em `~/.config/orchestra-agents/config` (formato shell):
 | Variável | Padrão | Descrição |
 |----------|--------|-----------|
 | `ORCHESTRA_TEAM` | *(menu)* | Compõe o time sem TTY: `"leader=claude,coder=codex,tester=opencode"`. Definido = pula o menu |
-| `ORCHESTRA_CODER` / `ORCHESTRA_REVIEWER` | *(vazio)* | Aliases herdados: fixam só o backend desses dois agentes |
+| `ORCHESTRA_CODER` / `ORCHESTRA_REVIEWER` | *(vazio)* | Aliases herdados: fixam só a IA desses dois agentes |
 | `ORCHESTRA_MODEL` | *(vazio)* | Override do modelo dos agentes **OpenCode** (`provider/modelo`) |
 | `ORCHESTRA_CODEX_MODEL` | *(vazio)* | Override do modelo dos agentes **Codex** |
 | `ORCHESTRA_MODEL_CLAUDE` | *(vazio)* | Override do modelo dos agentes **Claude Code** |
@@ -386,6 +393,48 @@ meu-projeto/.orchestra/
 
 ---
 
+## 🗑️ Desinstalação
+
+**Um comando só.** Ele faz tudo: encerra as sessões abertas (de todos os projetos), remove o
+comando `orchestra`, as linhas de `PATH` que tiver criado, o estado, o diretório de instalação
+e até o zellij — se tiver sido o instalador do Orchestra que o colocou aí.
+
+```bash
+orchestra uninstall
+```
+
+Ou, se o comando já não existir (ou você preferir):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
+```
+
+Você **não** precisa dar `orchestra down` antes, nem fechar painel nenhum.
+
+O que ele **preserva**, de propósito:
+
+| Preservado | Por quê |
+|------------|---------|
+| `.orchestra/` dos seus projetos | é a composição do seu time, sua — não do Orchestra |
+| Claude Code, OpenCode, Codex | ferramentas suas, usadas fora do Orchestra |
+| zellij que **você** já tinha | só é removido o que o instalador do Orchestra baixou |
+| agente `reviewer` na config do OpenCode | é uma entrada na sua config; o caminho é mostrado no fim |
+
+> Se for **reinstalar na mesma janela** do terminal, limpe o cache de comandos do shell —
+> `hash -r` no bash, `rehash` no zsh. Sem isso ele ainda aponta para o binário removido e você
+> vê um erro confuso. O próprio desinstalador lembra disso no fim.
+
+### Reinstalar do zero
+
+```bash
+orchestra uninstall
+hash -r 2>/dev/null || rehash 2>/dev/null || true
+curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
+orchestra doctor
+```
+
+---
+
 ## 🧩 Estrutura
 
 ```
@@ -399,11 +448,13 @@ orchestra-agents/
 │   ├── mux.sh                   # abstração do multiplexador (zellij | stub)
 │   └── layout.sh                # gera o layout KDL do time
 ├── agents/
-│   ├── run-agent.sh             # launcher + supervisor de um agente (qualquer backend)
+│   ├── run-agent.sh             # launcher + supervisor de um agente (qualquer IA)
 │   ├── leader-prompt.md         # instruções de orquestração do líder
 │   ├── roles/*.md               # prompts dos papéis prontos
 │   └── leader.sh, attach-*.sh   # compat shims → run-agent.sh
-└── config/opencode.reviewer.jsonc  # agente reviewer de referência
+└── config/
+    ├── opencode.reviewer.jsonc  # agente reviewer de referência
+    └── merge_reviewer.py        # mescla esse agente na sua config do OpenCode
 ```
 
 ---
@@ -448,7 +499,7 @@ DRY_RUN=1 ./scripts/release.sh minor   # só mostra o que faria
 - **`orchestra: command not found`** → adicione `~/.local/bin` ao `PATH`.
 - **Painel sumiu / foi fechado** → `orchestra heal` recria. O próprio `send` também recria o
   painel do agente se ele estiver faltando.
-- **O painel reinicia sozinho em loop** → o backend está falhando ao subir (binário ausente ou
+- **O painel reinicia sozinho em loop** → a IA daquele painel está falhando ao subir (binário ausente ou
   flag inválida). Depois de 3 falhas rápidas o supervisor para e libera um shell; rode
   `orchestra doctor`.
 - **`[TIMEOUT/PARCIAL]` na resposta** → o worker não chamou `orchestra done`. Aumente o
