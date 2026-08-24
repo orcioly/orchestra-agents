@@ -894,8 +894,80 @@ doctor() {
 }
 
 # remove COMPLETAMENTE o Orchestra Agents (preserva zellij/claude/opencode/codex)
+# Sistema operacional corrente. O instalador grava o dele no manifesto; se o
+# usuário desinstalar noutra máquina/SO, avisamos em vez de rodar um 'brew
+# uninstall' que não existe ali.
+orchestra_os() {
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) echo macos ;;
+    Linux)  if grep -qi microsoft /proc/version 2>/dev/null; then echo wsl; else echo linux; fi ;;
+    FreeBSD|OpenBSD|NetBSD) echo bsd ;;
+    CYGWIN*|MINGW*|MSYS*) echo windows ;;
+    *) echo desconhecido ;;
+  esac
+}
+
+# Desfaz o que o instalador registrou em installed.manifest. Cada linha é
+# "<método><TAB><alvo>" e sai pelo método com que entrou: 'brew uninstall' para o
+# que veio do brew, 'cargo uninstall' para o que veio do cargo, 'rm' para binário
+# baixado. O manifesto é a ÚNICA fonte: o que não está lá não foi instalado por nós
+# e não pode ser removido — é o que protege o zellij de quem já usava zellij antes.
+_uninstall_manifest() {
+  local mf="$ORCHESTRA_STATE/installed.manifest" method target zj
+  local os_now os_inst="" removeu=0
+  os_now="$(orchestra_os)"
+  if [ -f "$mf" ]; then
+    os_inst="$(awk -F'\t' '$1=="os"{print $2; exit}' "$mf" 2>/dev/null)"
+    if [ -n "$os_inst" ] && [ "$os_inst" != "$os_now" ]; then
+      echo "  ⚠️  instalado em '$os_inst', desinstalando em '$os_now' — o que não existir aqui é pulado"
+    fi
+    while IFS="$(printf '\t')" read -r method target || [ -n "$method" ]; do
+      [ -n "${method:-}" ] && [ -n "${target:-}" ] || continue
+      case "$method" in
+        os) ;;
+        file)
+          [ -e "$target" ] && rm -f "$target" \
+            && { echo "  removido $target (instalado pelo Orchestra)"; removeu=1; } ;;
+        brew)
+          if command -v brew >/dev/null 2>&1; then
+            brew uninstall "$target" >/dev/null 2>&1 \
+              && { echo "  removido $target via brew (instalado pelo Orchestra)"; removeu=1; } \
+              || echo "  ⚠️  'brew uninstall $target' falhou — remova à mão se quiser"
+          else
+            echo "  ⚠️  $target veio do brew, que não existe nesta máquina — remova à mão"
+          fi ;;
+        cargo)
+          if command -v cargo >/dev/null 2>&1; then
+            cargo uninstall "$target" >/dev/null 2>&1 \
+              && { echo "  removido $target via cargo (instalado pelo Orchestra)"; removeu=1; } \
+              || echo "  ⚠️  'cargo uninstall $target' falhou — remova à mão se quiser"
+          else
+            echo "  ⚠️  $target veio do cargo, que não existe nesta máquina — remova à mão"
+          fi ;;
+      esac
+    done <"$mf"
+  fi
+  # marcador antigo (instalações anteriores ao manifesto), ainda honrado
+  zj="$(cat "$ORCHESTRA_STATE/zellij.ours" 2>/dev/null || true)"
+  if [ -n "$zj" ] && [ -e "$zj" ]; then
+    rm -f "$zj" && { echo "  removido $zj (tinha sido instalado pelo Orchestra)"; removeu=1; }
+  fi
+  # ~/.config/zellij NÃO é nosso: quem escreve ali é o zellij em uso e o próprio
+  # usuário (config.kdl, layouts dele). Removemos só o layout que o Orchestra gera
+  # — feito acima — e avisamos sobre o resto, em vez de apagar ajustes que não fizemos.
+  if [ "$removeu" = 1 ] && [ -d "$HOME/.config/zellij" ] \
+     && [ -n "$(ls -A "$HOME/.config/zellij" 2>/dev/null)" ]; then
+    echo "  ⚠️  ~/.config/zellij ficou (é sua configuração do zellij, não do Orchestra)"
+  fi
+  if [ "$removeu" = 0 ] && command -v zellij >/dev/null 2>&1; then
+    echo "  zellij preservado (já existia antes do Orchestra)"
+  fi
+  return 0
+}
+
 uninstall() {
   echo "🧹 Desinstalando Orchestra Agents..."
+  echo "   sistema: $(orchestra_os)"
   kill_all_sessions
   # 1) symlink(s) do CLI no PATH (+ o local registrado na instalação)
   local d tgt bindir rc tmp IFSorig
@@ -917,13 +989,8 @@ uninstall() {
       && mv "$tmp" "$rc" && echo "  PATH removido de $rc"
   done
   rm -f "$HOME/.config/fish/conf.d/orchestra.fish"
-  # 3) zellij — só se foi o instalador do Orchestra que o colocou aqui
-  local zj; zj="$(cat "$ORCHESTRA_STATE/zellij.ours" 2>/dev/null || true)"
-  if [ -n "$zj" ] && [ -f "$zj" ]; then
-    rm -f "$zj" && echo "  removido $zj (tinha sido instalado pelo Orchestra)"
-  elif command -v zellij >/dev/null 2>&1; then
-    echo "  zellij preservado (já existia antes do Orchestra)"
-  fi
+  # 3) tudo o que o INSTALADOR pôs na máquina, cada item pelo método com que entrou
+  _uninstall_manifest
 
   # 4) layout do zellij
   rm -f "$HOME/.config/zellij/layouts/orchestra.kdl"

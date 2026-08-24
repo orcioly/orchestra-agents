@@ -95,33 +95,88 @@ fi
 [ -n "$BIN_DIR" ] || BIN_DIR="$(pick_bindir)"
 mkdir -p "$BIN_DIR"
 
+# ----- manifesto do que o INSTALADOR pôs na máquina -----
+# Uma linha por item: "<método><TAB><alvo>", método em file|brew|cargo. O uninstall
+# lê isto e desfaz cada item COM O MÉTODO CERTO — um zellij vindo do brew sai com
+# 'brew uninstall', um binário baixado sai com 'rm'.
+#
+# Só entra aqui o que NÓS instalamos. O que já existia na máquina nunca é registrado
+# e portanto nunca é removido: desinstalar o Orchestra não pode levar junto o zellij
+# de quem já usava zellij antes.
+# Sistema operacional: decide COMO instalar (e, gravado no manifesto, ajuda o
+# uninstall a saber em que máquina o instalador rodou). 'wsl' é Linux para efeito
+# de binário, mas é útil distinguir no diagnóstico.
+os_detect(){
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) echo macos ;;
+    Linux)  if grep -qi microsoft /proc/version 2>/dev/null; then echo wsl; else echo linux; fi ;;
+    FreeBSD|OpenBSD|NetBSD) echo bsd ;;
+    CYGWIN*|MINGW*|MSYS*) echo windows ;;
+    *) echo desconhecido ;;
+  esac
+}
+ORCHESTRA_OS="$(os_detect)"
+
+MANIFEST="$STATE_DIR/installed.manifest"
+record_installed(){ # $1 método  $2 alvo
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  local line; line="$(printf '%s\t%s' "$1" "$2")"
+  grep -qxF "$line" "$MANIFEST" 2>/dev/null && return 0
+  printf '%s\n' "$line" >>"$MANIFEST"
+}
+
 # 2) zellij (instala por padrão se faltar)
+_zellij_from_brew(){
+  have brew || return 1
+  brew install zellij || { c_warn "'brew install zellij' falhou — tentando o binário oficial"; return 1; }
+  record_installed brew zellij
+}
+
 install_zellij(){
-  c_say "Instalando zellij..."
-  if have cargo; then cargo install zellij && return 0; fi
+  c_say "Instalando zellij ($ORCHESTRA_OS)..."
   local arch target tmp url
+  # No macOS o brew é o gerenciador nativo e vem primeiro. No Linux o caminho
+  # padrão é o binário musl do release: lá o brew normalmente NÃO existe, e exigi-lo
+  # deixaria o instalador sem saída na máquina mais comum.
+  if [ "$ORCHESTRA_OS" = macos ] && _zellij_from_brew; then return 0; fi
   arch="$(uname -m)"
   case "$arch" in x86_64|amd64) arch=x86_64;; aarch64|arm64) arch=aarch64;; esac
-  case "$(uname -s)" in
-    Linux)  target="${arch}-unknown-linux-musl";;
-    Darwin) target="${arch}-apple-darwin";;
-    *) c_err "SO não suportado para auto-instalar zellij. Instale manualmente: https://zellij.dev"; return 1;;
+  case "$ORCHESTRA_OS" in
+    linux|wsl) target="${arch}-unknown-linux-musl";;
+    macos)     target="${arch}-apple-darwin";;
+    *)         target="";;
   esac
-  url="https://github.com/zellij-org/zellij/releases/latest/download/zellij-${target}.tar.gz"
-  tmp="$(mktemp -d)"
-  curl -fsSL "$url" -o "$tmp/zellij.tar.gz" || { c_err "download do zellij falhou: $url"; return 1; }
-  tar -xzf "$tmp/zellij.tar.gz" -C "$tmp"
-  mkdir -p "$BIN_DIR"; install -m 0755 "$tmp/zellij" "$BIN_DIR/zellij"
-  rm -rf "$tmp"
+  if [ -n "$target" ]; then
+    url="https://github.com/zellij-org/zellij/releases/latest/download/zellij-${target}.tar.gz"
+    tmp="$(mktemp -d)"
+    if curl -fsSL "$url" -o "$tmp/zellij.tar.gz" && tar -xzf "$tmp/zellij.tar.gz" -C "$tmp"; then
+      mkdir -p "$BIN_DIR"
+      install -m 0755 "$tmp/zellij" "$BIN_DIR/zellij"
+      record_installed file "$BIN_DIR/zellij"
+      # marcador antigo, mantido para quem desinstalar com um uninstall.sh anterior
+      printf '%s' "$BIN_DIR/zellij" >"$STATE_DIR/zellij.ours" 2>/dev/null || true
+      rm -rf "$tmp"
+      return 0
+    fi
+    rm -rf "$tmp"
+    c_warn "download do binário do zellij falhou — tentando compilar com cargo"
+  fi
+  # brew fora do macOS (linuxbrew), só depois do binário
+  if [ "$ORCHESTRA_OS" != macos ] && _zellij_from_brew; then return 0; fi
+  # cargo por último: compila do zero (lento), mas cobre arquitetura sem release
+  if have cargo; then
+    if cargo install zellij; then record_installed cargo zellij; return 0; fi
+  fi
+  c_err "não consegui instalar o zellij automaticamente neste sistema ($ORCHESTRA_OS)."
+  c_err "Instale manualmente: https://zellij.dev"
+  return 1
 }
+record_installed os "$ORCHESTRA_OS"
 if have zellij; then
   c_ok "zellij já instalado ($(zellij --version 2>/dev/null))"
 else
-  # marcador: só o zellij que NÓS instalamos é removido no uninstall — quem já
-  # tinha zellij antes não pode perdê-lo por desinstalar o Orchestra.
   if install_zellij; then
-    c_ok "zellij instalado em $BIN_DIR"
-    mkdir -p "$STATE_DIR" && printf '%s' "$BIN_DIR/zellij" >"$STATE_DIR/zellij.ours"
+    c_ok "zellij instalado ($(command -v zellij 2>/dev/null || echo "$BIN_DIR/zellij"))"
   fi
 fi
 

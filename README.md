@@ -188,8 +188,14 @@ O que ele **preserva**, de propósito:
 
 Fora isso, `orchestra uninstall` remove **tudo** o que o Orchestra colocou na máquina:
 instalação, times e prompts de todos os projetos, symlink do comando, linhas de PATH nos
-seus `rc`, layout do zellij e o agente `reviewer` que ele adicionou ao config do OpenCode.
-Seus projetos não guardam nada do Orchestra, então não sobra nada neles.
+seus `rc`, layout do zellij, o agente `reviewer` que ele adicionou ao config do OpenCode e
+**o próprio zellij, se foi ele que o instalou**. Seus projetos não guardam nada do Orchestra,
+então não sobra nada neles.
+
+O instalador anota cada coisa que instala e por qual meio (`brew`, binário oficial ou
+`cargo`), e a desinstalação desfaz cada uma pelo mesmo meio, no sistema operacional em que
+você está. O que já existia na máquina antes não é anotado — e portanto nunca é removido.
+Sua configuração pessoal do zellij (`~/.config/zellij`) também fica.
 | agente `reviewer` na config do OpenCode | é uma entrada na sua config; o caminho é mostrado no fim |
 
 > Se for **reinstalar na mesma janela** do terminal, limpe o cache de comandos do shell:

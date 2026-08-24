@@ -530,6 +530,54 @@ grep -q 'codex_writable_roots_arg' "$ROOT/agents/run-agent.sh" \
 [ "$c_ok" = 1 ] && ok "codex recebe o runtime como writable_root"
 
 # ---------------------------------------------------------------------------
+echo "18) Uninstall devolve a máquina ao estado anterior"
+u_ok=1
+# O que o instalador colocou tem de sair pelo MÉTODO com que entrou. O bug que
+# motivou isto: 'cargo install zellij' põe o binário em ~/.cargo/bin, mas o marcador
+# gravava $BIN_DIR/zellij — um caminho onde nada existia. O uninstall não achava o
+# arquivo, dizia "zellij preservado" e o zellij ficava na máquina para sempre.
+UNHOME="$(mktemp -d)"; UNBIN="$UNHOME/fakebin"; mkdir -p "$UNBIN" "$UNHOME/bin"
+for t in brew cargo; do
+  printf '#!/bin/sh\necho "$@" >>"%s/%s.log"\nexit 0\n' "$UNHOME" "$t" >"$UNBIN/$t"
+  chmod +x "$UNBIN/$t"
+done
+printf '#!/bin/sh\nexit 0\n' >"$UNHOME/bin/zellij"; chmod +x "$UNHOME/bin/zellij"
+UNSTATE="$UNHOME/state"; mkdir -p "$UNSTATE"
+printf 'os\tmacos\nfile\t%s\nbrew\tzellij\ncargo\tzellij\n' "$UNHOME/bin/zellij" >"$UNSTATE/installed.manifest"
+un_out="$(HOME="$UNHOME" PATH="$UNBIN:$PATH" ORCHESTRA_STATE="$UNSTATE" ORCHESTRA_HOME="$ROOT" \
+  bash -c '. "'"$ROOT"'/lib/core.sh" >/dev/null 2>&1; _uninstall_manifest' 2>&1)"
+[ -e "$UNHOME/bin/zellij" ] && { no "uninstall não removeu o binário registrado como 'file'"; u_ok=0; }
+grep -q '^uninstall zellij$' "$UNHOME/brew.log" 2>/dev/null \
+  || { no "uninstall não chamou 'brew uninstall zellij' para o item do brew"; u_ok=0; }
+grep -q '^uninstall zellij$' "$UNHOME/cargo.log" 2>/dev/null \
+  || { no "uninstall não chamou 'cargo uninstall zellij' para o item do cargo"; u_ok=0; }
+case "$un_out" in *preservado*) no "disse 'preservado' tendo removido itens do manifesto"; u_ok=0 ;; esac
+# e o oposto: sem manifesto, um zellij que já era do usuário NÃO pode sumir
+UNHOME2="$(mktemp -d)"; UNBIN2="$UNHOME2/fakebin"; mkdir -p "$UNBIN2" "$UNHOME2/.config/zellij"
+printf '#!/bin/sh\nexit 0\n' >"$UNBIN2/zellij"; chmod +x "$UNBIN2/zellij"
+: >"$UNHOME2/.config/zellij/config.kdl"
+UNSTATE2="$UNHOME2/state"; mkdir -p "$UNSTATE2"; printf 'os\tlinux\n' >"$UNSTATE2/installed.manifest"
+un_out2="$(HOME="$UNHOME2" PATH="$UNBIN2:$PATH" ORCHESTRA_STATE="$UNSTATE2" ORCHESTRA_HOME="$ROOT" \
+  bash -c '. "'"$ROOT"'/lib/core.sh" >/dev/null 2>&1; _uninstall_manifest' 2>&1)"
+[ -x "$UNBIN2/zellij" ] || { no "uninstall removeu um zellij que não foi ele que instalou"; u_ok=0; }
+[ -f "$UNHOME2/.config/zellij/config.kdl" ] || { no "uninstall apagou a config de um zellij alheio"; u_ok=0; }
+# e mesmo quando o zellij SAI, ~/.config/zellij é do usuário e tem de ficar
+mkdir -p "$UNHOME/.config/zellij"; : >"$UNHOME/.config/zellij/config.kdl"
+printf '#!/bin/sh\nexit 0\n' >"$UNHOME/bin/zellij"; chmod +x "$UNHOME/bin/zellij"
+HOME="$UNHOME" PATH="$UNBIN:$PATH" ORCHESTRA_STATE="$UNSTATE" ORCHESTRA_HOME="$ROOT" \
+  bash -c '. "'"$ROOT"'/lib/core.sh" >/dev/null 2>&1; _uninstall_manifest' >/dev/null 2>&1
+[ -f "$UNHOME/.config/zellij/config.kdl" ] \
+  || { no "uninstall apagou ~/.config/zellij, que é do usuário e não do Orchestra"; u_ok=0; }
+case "$un_out2" in *preservado*) ;; *) no "não avisou que o zellij alheio foi preservado"; u_ok=0 ;; esac
+# o instalador precisa registrar cada método, senão nada disso é acionável
+for m in 'record_installed brew zellij' 'record_installed file' 'record_installed cargo zellij'; do
+  grep -q "$m" "$ROOT/install.sh" || { no "install.sh não registra: $m"; u_ok=0; }
+done
+grep -q 'os_detect' "$ROOT/install.sh" || { no "install.sh não detecta o sistema operacional"; u_ok=0; }
+rm -rf "$UNHOME" "$UNHOME2"
+[ "$u_ok" = 1 ] && ok "cada item sai pelo método com que entrou; o que era do usuário fica"
+
+# ---------------------------------------------------------------------------
 printf '\nResultado: \033[1;32m%d passou\033[0m · \033[1;31m%d falhou\033[0m · \033[1;33m%d pulado\033[0m\n\n' \
   "$pass" "$fail" "$skip"
 [ "$fail" = 0 ] || exit 1
