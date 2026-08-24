@@ -354,6 +354,58 @@ echo "13) orchestra doctor"
 if "$ORCH" doctor >/dev/null 2>&1; then ok "doctor sem falhas (exit 0)"
 else skipt "doctor com falhas — esperado se claude/opencode/codex não estão neste host"; fi
 
+echo "14) Nome de sessão que cabe no multiplexador"
+n_ok=1
+# O zellij deriva o tamanho máximo do nome do que sobra em 'sockaddr_un.sun_path'
+# (104 bytes no macOS, 108 no Linux) depois do socket dir, que fica sob $TMPDIR.
+# No Linux ($TMPDIR=/tmp) o nome inteiro cabe; no macOS (/var/folders/<...>/T/,
+# 49 chars) sobram 24 — e o 'up' morria com "session name must be less than 0".
+( source "$ROOT/lib/mux.sh" 2>/dev/null
+
+  hist="orchestra-$(printf '%s' "$(basename /a/b/meu-projeto)" | tr -c 'a-zA-Z0-9_-' '-')-$(printf '%s' /a/b/meu-projeto | cksum | cut -d' ' -f1)"
+  cands="$(_mux_session_candidates /a/b/meu-projeto)"
+
+  # o 1º candidato é o formato histórico: enquanto ele couber, o Linux não muda de nome
+  [ "$(printf '%s\n' "$cands" | head -1)" = "$hist" ] \
+    || { echo "FAIL1"; exit 1; }
+
+  short_ok=0
+  while IFS= read -r c; do
+    # 'kill_all_sessions' acha as sessões do time com grep '^orchestra-'
+    case "$c" in orchestra-*) ;; *) echo "FAIL2"; exit 1 ;; esac
+    case "$c" in *--*) echo "FAIL3"; exit 1 ;; esac
+    [ "${#c}" -le 24 ] && short_ok=1
+  done <<EOF2
+$cands
+EOF2
+  # precisa existir ao menos um candidato que caiba no limite do macOS
+  [ "$short_ok" = 1 ] || { echo "FAIL4"; exit 1; }
+
+  # projeto que já se chama 'orchestra-*' não repete a palavra no nome curto
+  printf '%s\n' "$(_mux_session_candidates /a/b/orchestra-agents)" | grep -q '^orchestra-agents-' \
+    || { echo "FAIL5"; exit 1; }
+
+  # mesmo basename em caminhos diferentes → sessões diferentes mesmo depois de encurtar
+  a="$(_mux_session_candidates /cliente-a/api | sed -n 2p)"
+  b="$(_mux_session_candidates /cliente-b/api | sed -n 2p)"
+  [ "$a" != "$b" ] || { echo "FAIL6"; exit 1; }
+  echo OK
+) >"$ORCHESTRA_STATE/sess.out" 2>&1
+case "$(cat "$ORCHESTRA_STATE/sess.out")" in
+  *OK*) ;;
+  *FAIL1*) no "o 1º candidato mudou — nome de sessão regride no Linux"; n_ok=0 ;;
+  *FAIL2*) no "candidato sem o prefixo 'orchestra-' — 'orchestra kill' deixa de achar"; n_ok=0 ;;
+  *FAIL3*) no "nome de sessão com hífen duplo"; n_ok=0 ;;
+  *FAIL4*) no "nenhum candidato cabe em 24 chars — o 'up' quebra no macOS"; n_ok=0 ;;
+  *FAIL5*) no "projeto 'orchestra-*' repete a palavra no nome curto"; n_ok=0 ;;
+  *FAIL6*) no "dois projetos com o mesmo nome colidiriam na mesma sessão"; n_ok=0 ;;
+  *) no "_mux_session_candidates não pôde ser exercitada"; n_ok=0 ;;
+esac
+# a montagem tem de viver em lib/mux.sh, não inline no 'up'
+grep -q 'sess="$(mux_session_name "$ORCHESTRA_PROJECT")"' "$ORCH" \
+  || { no "o 'up' deveria pedir o nome de sessão ao mux (mux_session_name)"; n_ok=0; }
+[ "$n_ok" = 1 ] && ok "nome de sessão encurta sozinho e segue estável por projeto"
+
 # ---------------------------------------------------------------------------
 printf '\nResultado: \033[1;32m%d passou\033[0m · \033[1;31m%d falhou\033[0m · \033[1;33m%d pulado\033[0m\n\n' \
   "$pass" "$fail" "$skip"

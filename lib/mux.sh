@@ -9,6 +9,7 @@
 #   mux_backend                   → nome do backend ativo
 #   mux_available                 → 0 se o multiplexador está utilizável
 #   mux_session                   → nome da sessão do multiplexador
+#   mux_session_name <projeto>    → nome de sessão estável que CABE neste mux
 #   mux_pane_id <agente>          → ecoa o pane-id do agente ("" se não existe)
 #   mux_pane_alive <pane>         → 0 se o pane existe
 #   mux_send_text <pane> <texto>  → injeta texto (multilinha, sem submeter)
@@ -42,6 +43,45 @@ _mux_pane_file() { echo "$(_mux_run_dir)/${1}.pane"; }
 # título do terminal via OSC, então o título não é estável — o comando é.
 _mux_agent_cmd_marker() { echo "run-agent.sh $1"; }
 
+# Um candidato de nome encurtado. Cortar o slug num tamanho fixo pode deixá-lo
+# terminando em hífen ('meu-projeto' cortado em 4 vira 'meu-'), o que produziria
+# 'orchestra-meu--123': aparamos o hífen, e se não sobrar slug o nome fica só com o
+# checksum.
+_mux_session_cand() { # $1 slug cortado  $2 hash curto
+  local v="$1"
+  while [ -n "$v" ] && [ "${v%-}" != "$v" ]; do v="${v%-}"; done
+  if [ -n "$v" ]; then printf '%s\n' "orchestra-${v}-${2}"
+  else                 printf '%s\n' "orchestra-${2}"; fi
+}
+
+# Candidatos a nome de sessão de um projeto, do mais legível ao mais curto, um por
+# linha. É PURO (não encosta no multiplexador) — o smoke test exercita esta função
+# direto, sem zellij.
+#
+# Existe encurtamento porque o tamanho do nome NÃO é livre: o zellij o deriva do que
+# sobra em 'sockaddr_un.sun_path' (104 bytes no macOS, 108 no Linux) depois do
+# diretório do socket, que fica sob $TMPDIR. No Linux $TMPDIR é /tmp e o nome inteiro
+# cabe; no macOS é /var/folders/<...>/T/ (49 chars) e sobram 24.
+#
+# O prefixo 'orchestra-' vai em TODOS os candidatos: 'kill_all_sessions' (lib/core.sh)
+# acha as sessões do time com grep '^orchestra-'. NÃO remover o prefixo ao encurtar.
+_mux_session_candidates() { # $1 projeto
+  local proj="${1:-$PWD}" slug hash short
+  # printf (e não o pipe direto do basename): 'tr -c' converteria o \n final em '-',
+  # deixando o nome com hífen duplo antes do checksum.
+  slug="$(printf '%s' "$(basename "$proj")" | tr -c 'a-zA-Z0-9_-' '-')"
+  hash="$(printf '%s' "$proj" | cksum | cut -d' ' -f1)"
+  # Projeto que já começa com 'orchestra-' não repete a palavra no nome curto:
+  # 'orchestra-agents' viraria 'orchestra-orchestr-60767', que além de feio perde
+  # justamente a parte que identifica o projeto. Vira 'orchestra-agents-60767'.
+  short="${slug#orchestra-}"
+  # O 1º é o formato histórico: enquanto ele couber (Linux), nada muda de nome.
+  printf '%s\n' "orchestra-${slug}-${hash}"
+  _mux_session_cand "${short:0:8}" "${hash: -5}"
+  _mux_session_cand "${short:0:4}" "${hash: -5}"
+  printf '%s\n' "orchestra-${hash: -5}"
+}
+
 # ---------------------------------------------------------------------------
 # backend: zellij
 # ---------------------------------------------------------------------------
@@ -53,6 +93,15 @@ _zj_session() {
   local s; s="$(cat "$ORCHESTRA_STATE/mux.session" 2>/dev/null)"
   [ -n "$s" ] || return 1
   echo "$s"
+}
+
+# O zellij aceita este nome de sessão? Sondagem barata (~25ms, medido): 'list-panes'
+# numa sessão inexistente responde "There is no active session!", enquanto um nome
+# comprido demais nem chega ao servidor — o parser recusa com "error: invalid value".
+# Qualquer outra falha conta como "cabe": é o comportamento de hoje, e o erro real do
+# zellij aparece na hora de subir, em vez de o nome ser encurtado à toa.
+_zj_session_name_fits() { # $1 nome
+  ! zellij -s "$1" action list-panes -j 2>&1 | grep -q 'invalid value'
 }
 
 # wrapper de 'zellij action' já mirando a sessão certa
@@ -197,6 +246,26 @@ mux_session() {
     stub)   echo "stub" ;;
     zellij) _zj_session ;;
   esac
+}
+
+# Nome de sessão estável por projeto, já garantido caber neste multiplexador. Tenta os
+# candidatos do mais legível ao mais curto e devolve o primeiro aceito — no Linux o
+# primeiro passa e o nome é exatamente o de sempre.
+mux_session_name() { # $1 projeto
+  local proj="${1:-$PWD}" cand last=""
+  case "$ORCHESTRA_MUX" in
+    stub) echo "stub"; return 0 ;;
+  esac
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    last="$cand"
+    if _zj_session_name_fits "$cand"; then echo "$cand"; return 0; fi
+  done < <(_mux_session_candidates "$proj")
+  # Nenhum coube: devolve o mais curto e explica, em vez de morrer no erro cru do
+  # zellij ("session name must be less than 0 characters", que não diz nada).
+  echo "⚠️  o zellij recusou até o nome curto de sessão: o socket sob" >&2
+  echo "   \$TMPDIR (${TMPDIR:-/tmp}) não deixa espaço. Tente 'TMPDIR=/tmp orchestra'." >&2
+  echo "$last"
 }
 
 # ecoa o pane-id do agente, revalidando o valor salvo. Se o painel sumiu (usuário

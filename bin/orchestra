@@ -118,10 +118,10 @@ case "$cmd" in
     layout="$(generate_layout)"
     echo "  ✔ time: $(team_all_names | tr '\n' ' ')"
 
-    # nome de sessão estável por projeto → rodar 'orchestra' de novo reanexa em vez de falhar
-    # printf (e não o pipe direto do basename): 'tr -c' converteria o \n final em '-',
-    # deixando o nome com hífen duplo antes do checksum.
-    sess="orchestra-$(printf '%s' "$(basename "$ORCHESTRA_PROJECT")" | tr -c 'a-zA-Z0-9_-' '-')-$(printf '%s' "$ORCHESTRA_PROJECT" | cksum | cut -d' ' -f1)"
+    # nome de sessão estável por projeto → rodar 'orchestra' de novo reanexa em vez de
+    # falhar. A montagem vive em lib/mux.sh (é conceito de multiplexador) e encurta
+    # sozinha quando o zellij não aceita o nome inteiro — ver mux_session_name.
+    sess="$(mux_session_name "$ORCHESTRA_PROJECT")"
     printf '%s' "$sess" >"$ORCHESTRA_STATE/mux.session"
     line="$(zellij list-sessions --no-formatting 2>/dev/null | grep -E "^${sess}( |\$)" || true)"
     if [ -n "$line" ]; then
