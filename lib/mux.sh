@@ -100,8 +100,16 @@ _zj_session() {
 # comprido demais nem chega ao servidor — o parser recusa com "error: invalid value".
 # Qualquer outra falha conta como "cabe": é o comportamento de hoje, e o erro real do
 # zellij aparece na hora de subir, em vez de o nome ser encurtado à toa.
+#
+# A saída é capturada em variável em vez de passada por 'grep': o 'up' roda sob
+# 'set -o pipefail', e num pipe o exit do zellij (2, quando recusa o nome) VENCE o do
+# grep que acabou de casar — o teste dava "cabe" justamente para o nome grande demais,
+# que é o caso que ele existe para pegar. NÃO reintroduzir o pipe aqui.
 _zj_session_name_fits() { # $1 nome
-  ! zellij -s "$1" action list-panes -j 2>&1 | grep -q 'invalid value'
+  local out
+  out="$(zellij -s "$1" action list-panes -j 2>&1)"
+  case "$out" in *'invalid value'*) return 1 ;; esac
+  return 0
 }
 
 # wrapper de 'zellij action' já mirando a sessão certa

@@ -404,6 +404,41 @@ esac
 # a montagem tem de viver em lib/mux.sh, não inline no 'up'
 grep -q 'sess="$(mux_session_name "$ORCHESTRA_PROJECT")"' "$ORCH" \
   || { no "o 'up' deveria pedir o nome de sessão ao mux (mux_session_name)"; n_ok=0; }
+# A sondagem tem de funcionar sob 'set -o pipefail' (o 'up' roda assim). Com um pipe
+# 'zellij | grep', o exit 2 do zellij ao recusar o nome VENCE o do grep que casou, e a
+# sondagem respondia "cabe" justamente para o nome grande demais — o time não subia no
+# macOS mesmo com o encurtamento no lugar. Fake zellij com o teto de 24 chars do macOS.
+ZJFAKE="$ORCHESTRA_STATE/zjfake"; mkdir -p "$ZJFAKE"
+cat >"$ZJFAKE/zellij" <<'ZJ'
+#!/bin/sh
+name=""
+while [ $# -gt 0 ]; do
+  case "$1" in -s) name="$2"; shift 2 ;; *) shift ;; esac
+done
+if [ "${#name}" -gt 24 ]; then
+  echo "error: invalid value '$name' for '--session <SESSION>': session name must be less than 0 characters" >&2
+  exit 2
+fi
+echo "There is no active session!"
+exit 1
+ZJ
+chmod +x "$ZJFAKE/zellij"
+probe="$(
+  set -uo pipefail
+  PATH="$ZJFAKE:$PATH"; export PATH
+  ORCHESTRA_MUX=zellij; export ORCHESTRA_MUX
+  source "$ROOT/lib/mux.sh" 2>/dev/null
+  _zj_session_name_fits "orchestra-nome-longo-demais-1234" && echo "LONGO_CABE"
+  _zj_session_name_fits "orchestra-curto-1234" || echo "CURTO_NAO_CABE"
+  mux_session_name /a/b/tsoft-rep-hub
+)"
+case "$probe" in
+  *LONGO_CABE*)     no "sob pipefail a sondagem aceita nome longo demais (o 'up' quebra no macOS)"; n_ok=0 ;;
+  *CURTO_NAO_CABE*) no "sob pipefail a sondagem recusa um nome que cabe"; n_ok=0 ;;
+esac
+chosen="$(printf '%s\n' "$probe" | tail -1)"
+[ -n "$chosen" ] && [ "${#chosen}" -le 24 ] \
+  || { no "mux_session_name devolveu '$chosen' (${#chosen} chars) onde o teto é 24"; n_ok=0; }
 [ "$n_ok" = 1 ] && ok "nome de sessão encurta sozinho e segue estável por projeto"
 
 # ---------------------------------------------------------------------------
