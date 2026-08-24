@@ -462,11 +462,11 @@ if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
     *TIMEOUT_INVALIDO*) no "'read -t' recusou o timeout — a detecção de fração não pegou"; m_ok=0 ;;
   esac
   case "$menu_out" in
-    *ANCORA_ABSOLUTA*)  no "o menu voltou a usar \033[u — com scroll ele se duplica na tela"; m_ok=0 ;;
+    *ANCORA_ABSOLUTA*)  no "o menu voltou a usar âncora absoluta de cursor — com scroll ele se duplica na tela"; m_ok=0 ;;
   esac
   case "$menu_out" in
     *REDESENHO_RELATIVO*) ;;
-    *) no "o redesenho não é relativo (\033[<n>A ausente)"; m_ok=0 ;;
+    *) no "o redesenho não é relativo: falta o movimento de subir N linhas"; m_ok=0 ;;
   esac
   case "$menu_out" in
     *CHEGOU_NO_ADICIONAR*) ;;
@@ -576,6 +576,158 @@ done
 grep -q 'os_detect' "$ROOT/install.sh" || { no "install.sh não detecta o sistema operacional"; u_ok=0; }
 rm -rf "$UNHOME" "$UNHOME2"
 [ "$u_ok" = 1 ] && ok "cada item sai pelo método com que entrou; o que era do usuário fica"
+
+# ---------------------------------------------------------------------------
+echo "19) O motor do menu vive num arquivo só"
+me_ok=1
+
+# Lint de arquitetura, não de estilo. O motor do menu — esconder o cursor, apagar o
+# desenho anterior, ler uma tecla — carrega dois bugs que NÃO aparecem em bash 5 nem
+# fora de um pty: o bash 3.2 do macOS recusa 'read -t 0.05' (era isso que fazia toda
+# seta fechar o menu, e o zellij nem abria) e a âncora absoluta reimprime o menu
+# quando o terminal rola. Quem duplicar o motor não vai ver o bug voltar na própria
+# máquina — por isso a regra é teste que reprova o build, e não documentação.
+#
+# Os regex abaixo são escritos para NÃO casarem consigo mesmos ('read -rs[nt]' não
+# contém 'read -rsn'), e é isso que permite varrer o repositório INTEIRO, este arquivo
+# de teste incluído, sem abrir a exceção conveniente de "testes não contam".
+MENU_OWNER="lib/menu.sh"
+
+# Isenção TEMPORÁRIA, com prazo mecânico: select_team() ainda hospeda o motor antigo
+# em lib/core.sh e só o perde na migração. Até lá ele fica fora da Regra 1 — mas a
+# isenção EXPIRA SOZINHA: quando o arquivo isento não tiver mais nenhum padrão do
+# motor, este teste falha pedindo que a isenção saia junto. É dívida com validade,
+# vencendo por conta própria, em vez de um "remover depois" que ninguém lê.
+MENU_EXEMPT="lib/core.sh"
+
+_menu_engine_patterns() { # regex TAB o-que-é TAB onde-pode TAB o-que-usar TAB por-que-dói
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    'read -rs[nt]' \
+    'leitura de tecla crua' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_read_key' \
+    'o bash 3.2 do macOS recusa timeout fracionário e devolve a variável VAZIA, que é exatamente como se reconhece "Esc sozinho": toda seta fecha o menu'
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    '\\033\[\?25[lh]' \
+    'esconder ou mostrar o cursor' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_begin e menu_end' \
+    'quem esconde o cursor tem de garantir a devolução dele em INT/TERM/EXIT, e essa proteção mora no motor'
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    '\\033\[(%d|[0-9]+|\$\{?[A-Za-z_][A-Za-z_0-9]*\}?)A' \
+    'redesenho relativo' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_draw_begin e menu_draw_end' \
+    'um segundo contador de linhas sai de sincronia com o primeiro e o menu volta a se reimprimir'
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    '[Dd][Rr][Aa][Ww][Nn]=' \
+    'contador de linhas do desenho' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_draw_end' \
+    'o estado do desenho é do motor; conteúdo que conta linhas por fora duplica o menu quando erra a conta'
+}
+
+_menu_engine_hits() { # $1 arquivo  $2 'motor+ancora'|'so-ancora' — ecoa linha TAB … por violação
+  local f="$1" escopo="$2" rx what onde use why achadas n
+  {
+    # Regra 2: a âncora absoluta não tem uso legítimo em lugar NENHUM, nem no dono do
+    # motor. Por isso ela é checada à parte, em todos os arquivos e sem isenção.
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      '\\033\[[su]([^A-Za-z0-9_]|$)' \
+      'âncora absoluta de cursor' \
+      "não pode existir em arquivo nenhum, nem em $MENU_OWNER" \
+      'menu_draw_begin, que sobe N linhas a partir de onde o cursor está' \
+      'a âncora guarda a LINHA ABSOLUTA da tela: quando o menu não cabe na janela o terminal rola, ela passa a apontar para o meio do bloco e o menu aparece duas vezes'
+    [ "$escopo" = 'motor+ancora' ] && _menu_engine_patterns
+  } | while IFS="$(printf '\t')" read -r rx what onde use why; do
+    [ -n "$rx" ] || continue
+    # Regra 3: comentário não é código. lib/core.sh DOCUMENTA esta armadilha e cita a
+    # âncora no texto — sem o filtro, a guarda reprovaria justamente a documentação
+    # que existe para evitar o erro.
+    achadas="$(grep -nE "$rx" "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#')"
+    [ -n "$achadas" ] || continue
+    printf '%s\n' "$achadas" | while IFS=: read -r n _; do
+      printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$what" "$onde" "$use" "$why"
+    done
+  done
+}
+
+_menu_engine_report() { # $1 caminho relativo  $2 saída de _menu_engine_hits
+  # A mensagem tem de ENSINAR: quem esbarrar nela pode não conhecer a história.
+  printf '%s\n' "$2" | while IFS="$(printf '\t')" read -r n what onde use why; do
+    [ -n "$n" ] || continue
+    printf '  \033[1;31m✖\033[0m %s em %s:%s\n' "$what" "$1" "$n"
+    printf '     %s.\n' "$onde"
+    printf '     %s.\n' "$why"
+    printf '     Use %s.\n' "$use"
+  done
+}
+
+menu_scan_files=("$ROOT/bin/orchestra" "$ROOT"/lib/*.sh "$ROOT"/agents/*.sh \
+                 "$ROOT"/scripts/*.sh "$ROOT/install.sh" "$ROOT/uninstall.sh" \
+                 "$ROOT/tests/smoke.sh")
+for f in "${menu_scan_files[@]}"; do
+  [ -f "$f" ] || continue
+  rel="${f#"$ROOT"/}"
+  escopo='motor+ancora'
+  case "$rel" in "$MENU_OWNER"|"$MENU_EXEMPT") escopo='so-ancora' ;; esac
+  hits="$(_menu_engine_hits "$f" "$escopo")"
+  [ -n "$hits" ] || continue
+  no "regra do motor de menu violada em $rel"
+  _menu_engine_report "$rel" "$hits"
+  me_ok=0
+done
+
+# O prazo da isenção, cobrado por máquina.
+if [ -n "$MENU_EXEMPT" ] && [ -z "$(_menu_engine_hits "$ROOT/$MENU_EXEMPT" 'motor+ancora')" ]; then
+  no "a isenção de $MENU_EXEMPT venceu: o motor antigo já saiu de lá — apague MENU_EXEMPT para a Regra 1 passar a valer nele também"
+  me_ok=0
+fi
+
+# Regra 4 — um teste que nunca falhou não é um teste. Sem este caso, um erro no grep
+# deixaria a guarda passando para sempre sem verificar nada. Fabricamos o caso real,
+# um menu novo escrito do zero em OUTRO arquivo, e exigimos que seja reprovado. Os
+# padrões entram por marcadores (@L@, @A@…) trocados na hora, justamente para que
+# ESTAS linhas aqui não disparem a guarda que elas testam.
+MENUBAD="$ORCHESTRA_STATE/menu-duplicado.sh"
+sed 's/@L@/l/; s/@A@/A/; s/@W@/w/; s/@N@/n/; s/@S@/s/' >"$MENUBAD" <<'FALSO'
+#!/usr/bin/env bash
+meu_menu_novo() {
+  printf '\033[?25@L@' >/dev/tty
+  printf '\033[3@A@\r\033[J' >/dev/tty
+  dra@W@n=0
+  read -rs@N@1 tecla </dev/tty
+  printf '\033[@S@' >/dev/tty
+}
+FALSO
+menu_bad="$(_menu_engine_hits "$MENUBAD" 'motor+ancora')"
+for esperado in 'leitura de tecla crua' 'esconder ou mostrar o cursor' 'redesenho relativo' \
+                'contador de linhas do desenho' 'âncora absoluta de cursor'; do
+  case "$menu_bad" in
+    *"$esperado"*) ;;
+    *) no "a guarda deixou passar um menu duplicado: não reprovou '$esperado'"; me_ok=0 ;;
+  esac
+done
+
+# E o oposto, também por máquina: os MESMOS padrões, comentados, não podem reprovar.
+# É isso que mantém a documentação da armadilha viva dentro do código.
+sed 's/^/# /' "$MENUBAD" >"$MENUBAD.comentado"
+[ -z "$(_menu_engine_hits "$MENUBAD.comentado" 'motor+ancora')" ] \
+  || { no "a guarda reprovou linhas de comentário: a documentação da armadilha não pode derrubar o build"; me_ok=0; }
+rm -f "$MENUBAD" "$MENUBAD.comentado"
+
+# A guarda impede; a documentação orienta. Quem esbarra no teste vai procurar o porquê.
+grep -q 'menu_read_key' "$ROOT/CONTRIBUTING.md" \
+  || { no "CONTRIBUTING.md não registra que o motor do menu mora em $MENU_OWNER"; me_ok=0; }
+# CLAUDE.md não é versionado (está no .gitignore), então no CI ele nem existe:
+# exigi-lo lá reprovaria o build por um arquivo ausente. Cobra-se onde ele existe.
+if [ -f "$ROOT/CLAUDE.md" ] && ! grep -q 'menu_read_key' "$ROOT/CLAUDE.md"; then
+  no "CLAUDE.md não registra a armadilha do motor de menu duplicado"; me_ok=0
+fi
+grep -q 'POR QUE ESTE ARQUIVO EXISTE' "$ROOT/lib/menu.sh" \
+  || { no "lib/menu.sh perdeu o comentário que explica por que ele é único"; me_ok=0; }
+
+[ "$me_ok" = 1 ] && ok "motor do menu não duplicado, com a guarda provada em arquivo forjado"
 
 # ---------------------------------------------------------------------------
 printf '\nResultado: \033[1;32m%d passou\033[0m · \033[1;31m%d falhou\033[0m · \033[1;33m%d pulado\033[0m\n\n' \

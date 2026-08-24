@@ -42,6 +42,7 @@ Ele cobre sintaxe (`bash -n`), o modelo do time, composição por env, `add`/`rm
 - Mantenha a mesma densidade de comentários e idioma das mensagens já existentes (mensagens ao usuário em PT-BR).
 - Não introduza dependências além de `bash`, `python3`, `git` e as ferramentas já usadas (`zellij`, `claude`, `opencode`, `codex`).
 - Todo acesso ao multiplexador passa por `lib/mux.sh` — não chame `zellij` direto em outro arquivo.
+- Todo menu usa o motor de `lib/menu.sh` (`menu_read_key`, `menu_draw_begin`/`menu_draw_end`, `menu_begin`/`menu_end`) — não escreva leitura de tecla nem redesenho de tela em outro arquivo. O smoke reprova o build se você duplicar isso; os dois bugs que a regra evita são invisíveis em bash 5 e fora de um terminal de verdade.
 
 ## 📝 Mensagens de commit
 
