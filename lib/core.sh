@@ -96,6 +96,8 @@ _orchestra_stamp_project() {
 . "$ORCHESTRA_HOME/lib/team.sh"
 # shellcheck source=/dev/null
 . "$ORCHESTRA_HOME/lib/layout.sh"
+# shellcheck source=/dev/null
+. "$ORCHESTRA_HOME/lib/menu.sh"
 
 # ----- Resolução dos binários dos backends -----
 _resolve_opencode() {
