@@ -34,15 +34,61 @@ ORCHESTRA_TIMEOUT="${ORCHESTRA_TIMEOUT:-300}"
 mkdir -p "$ORCHESTRA_STATE"
 
 # ----- Projeto corrente e diretórios de runtime -----
-# O runtime mora DENTRO do projeto (.orchestra/run) de propósito: é o que permite
-# ao worker codex, rodando com sandbox 'workspace-write', escrever a resposta.
+# NADA do Orchestra é escrito na raiz do projeto do usuário. O time, os prompts e o
+# runtime vivem FORA, em $ORCHESTRA_STATE/projects/<slug>/ — um diretório por projeto.
+#
+# Por que o estado e não a pasta de instalação ($ORCHESTRA_HOME): o install.sh faz
+# 'rm -rf "$INSTALL_DIR"' a cada instalação para não misturar versões, então guardar
+# o time lá o apagaria em TODA atualização, de todos os projetos de uma vez.
+#
+# O slug leva o checksum do caminho ABSOLUTO, e não só o basename: sem ele
+# ~/cliente-a/api e ~/cliente-b/api dividiriam o mesmo time.
 ORCHESTRA_PROJECT="${ORCHESTRA_PROJECT:-}"
 if [ -z "$ORCHESTRA_PROJECT" ]; then
   ORCHESTRA_PROJECT="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"
 fi
 [ -n "$ORCHESTRA_PROJECT" ] || ORCHESTRA_PROJECT="$PWD"
-ORCHESTRA_DIR="$ORCHESTRA_PROJECT/.orchestra"
+
+project_slug() { # $1 projeto (padrão: o corrente) → <basename>-<checksum do caminho>
+  local proj="${1:-$ORCHESTRA_PROJECT}" slug hash
+  # printf e não o pipe direto do basename: 'tr -c' converteria o \n final em '-'
+  slug="$(printf '%s' "$(basename "$proj")" | tr -c 'a-zA-Z0-9_-' '-')"
+  while [ -n "$slug" ] && [ "${slug%-}" != "$slug" ]; do slug="${slug%-}"; done
+  hash="$(printf '%s' "$proj" | cksum | cut -d' ' -f1)"
+  if [ -n "$slug" ]; then printf '%s-%s' "$slug" "$hash"; else printf 'projeto-%s' "$hash"; fi
+}
+
+ORCHESTRA_DIR="$ORCHESTRA_STATE/projects/$(project_slug)"
 ORCHESTRA_RUN_DIR="$ORCHESTRA_DIR/run"
+
+# Migração de quem já usava o Orchestra: até a v0.2 o time morava em
+# <projeto>/.orchestra. Movemos UMA vez, sem sobrescrever nada que já exista no
+# destino, e deixamos o projeto limpo. Silencioso de propósito: roda em todo
+# 'source' do core, inclusive dentro dos painéis.
+_orchestra_migrate_legacy_dir() {
+  local legacy="$ORCHESTRA_PROJECT/.orchestra" f base
+  [ -d "$legacy" ] || return 0
+  [ -e "$ORCHESTRA_DIR/team.json" ] && { rm -rf "$legacy" 2>/dev/null; return 0; }
+  mkdir -p "$ORCHESTRA_DIR" 2>/dev/null || return 0
+  for f in "$legacy"/* "$legacy"/.gitignore; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    [ "$base" = .gitignore ] && continue          # não faz sentido no novo lugar
+    [ -e "$ORCHESTRA_DIR/$base" ] || mv "$f" "$ORCHESTRA_DIR/$base" 2>/dev/null
+  done
+  rm -rf "$legacy" 2>/dev/null
+}
+_orchestra_migrate_legacy_dir
+
+# Deixa registrado a que projeto este diretório pertence. O slug tem checksum e não
+# é reversível, então sem isto o uninstall não teria como achar um .orchestra/ órfão
+# de versão antiga, e quem abrisse ~/.local/state/orchestra-agents/projects/ não
+# saberia o que é cada pasta.
+_orchestra_stamp_project() {
+  [ -d "$ORCHESTRA_DIR" ] || return 0
+  [ "$(cat "$ORCHESTRA_DIR/project.path" 2>/dev/null)" = "$ORCHESTRA_PROJECT" ] && return 0
+  printf '%s' "$ORCHESTRA_PROJECT" >"$ORCHESTRA_DIR/project.path" 2>/dev/null || true
+}
 
 # shellcheck source=/dev/null
 . "$ORCHESTRA_HOME/lib/mux.sh"
@@ -82,11 +128,21 @@ backend_url() { # $1 backend  → onde instalar
   esac
 }
 
-# Sandbox do Codex. Todos os papéis precisam escrever em .orchestra/run/ para
-# fechar o ciclo com 'orchestra done', então usamos workspace-write mesmo no
-# reviewer — a disciplina read-only dele é garantida pelo prompt de papel.
+# Sandbox do Codex. Todos os papéis precisam escrever no runtime para fechar o ciclo
+# com 'orchestra done', então usamos workspace-write mesmo no reviewer — a disciplina
+# read-only dele é garantida pelo prompt de papel, não pelo sandbox.
 codex_sandbox_for() { # $1 role
   echo "${ORCHESTRA_CODEX_SANDBOX:-workspace-write}"
+}
+
+# O runtime saiu de dentro do projeto, e 'workspace-write' só deixa escrever no
+# workspace: sem isto o 'orchestra done' de um worker codex morre em "Operation not
+# permitted" e TODO despacho para ele termina em timeout. 'writable_roots' abre
+# exatamente o diretório do Orchestra daquele projeto e mais nada — o sandbox
+# continua valendo para o resto do disco. Verificado no codex-cli 0.149.1.
+codex_writable_roots_arg() { # → ecoa o par '-c chave=valor' (nada se não houver dir)
+  [ -n "${ORCHESTRA_DIR:-}" ] || return 0
+  printf 'sandbox_workspace_write.writable_roots=["%s"]' "$ORCHESTRA_DIR"
 }
 
 # ----- OpenCode: config e agentes -----
@@ -100,11 +156,33 @@ oc_config_path() {
 }
 
 # garante o agente 'reviewer' no config do OpenCode — automático e idempotente.
+# Quando o merge devolve 0 foi ELE que inseriu o agente; registramos isso para o
+# uninstall poder desfazer. Sem a marca, um 'reviewer' que já era do usuário seria
+# apagado na desinstalação — mesmo cuidado que já existe com o zellij.
 ensure_reviewer_agent() {
   local script="$ORCHESTRA_HOME/config/merge_reviewer.py"
   local tmpl="$ORCHESTRA_HOME/config/opencode.reviewer.jsonc"
   [ -f "$script" ] && [ -f "$tmpl" ] && command -v python3 >/dev/null 2>&1 || return 0
-  python3 "$script" "$(oc_config_path)" "$tmpl" >/dev/null 2>&1 || true
+  if python3 "$script" "$(oc_config_path)" "$tmpl" >/dev/null 2>&1; then
+    printf '%s' "$(oc_config_path)" >"$ORCHESTRA_STATE/opencode.reviewer.ours" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# Desfaz o ensure_reviewer_agent. Só age se a marca existir.
+remove_reviewer_agent() {
+  local mark="$ORCHESTRA_STATE/opencode.reviewer.ours" script cfg rc
+  [ -f "$mark" ] || return 0
+  cfg="$(cat "$mark" 2>/dev/null)"; [ -n "$cfg" ] || return 0
+  script="$ORCHESTRA_HOME/config/remove_reviewer.py"
+  [ -f "$script" ] && command -v python3 >/dev/null 2>&1 || return 0
+  python3 "$script" "$cfg" >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    0)  echo "  removido o agente 'reviewer' de $cfg (tinha sido posto pelo Orchestra)" ;;
+    3)  echo "  ⚠️  o agente 'reviewer' ficou em $cfg — o arquivo tem comentários seus e"
+        echo "     não quis reformatá-lo; apague o bloco \"reviewer\" à mão se quiser" ;;
+  esac
+  return 0
 }
 
 # existe um agente com esse nome no config do OpenCode?
@@ -347,11 +425,11 @@ _resolve_role() { # $1 nome  [$2 role desejado]  [$3 texto do prompt]
   # instruções dadas na criação => agente custom, com o texto do usuário
   if [ -n "$text" ]; then
     mkdir -p "$(team_prompts)"
-    pf=".orchestra/prompts/$name.md"
+    pf="prompts/$name.md"
     { printf 'Você é o agente **%s** do Orchestra Agents.\n\n' "$name"
       printf '%s\n' "$text"
       printf '\nTrabalhe no projeto onde este painel foi aberto.\n'
-    } >"$ORCHESTRA_PROJECT/$pf"
+    } >"$ORCHESTRA_DIR/$pf"
     printf '%s\t%s' custom "$pf"
     return 0
   fi
@@ -359,10 +437,10 @@ _resolve_role() { # $1 nome  [$2 role desejado]  [$3 texto do prompt]
     *" $role "*) ;;
     *) role=custom
        mkdir -p "$(team_prompts)"
-       pf=".orchestra/prompts/$name.md"
-       [ -f "$ORCHESTRA_PROJECT/$pf" ] || {
-         cp "$ORCHESTRA_HOME/agents/roles/custom.md" "$ORCHESTRA_PROJECT/$pf" 2>/dev/null || \
-           printf 'Você é o agente %s do Orchestra.\n' "$name" >"$ORCHESTRA_PROJECT/$pf"
+       pf="prompts/$name.md"
+       [ -f "$ORCHESTRA_DIR/$pf" ] || {
+         cp "$ORCHESTRA_HOME/agents/roles/custom.md" "$ORCHESTRA_DIR/$pf" 2>/dev/null || \
+           printf 'Você é o agente %s do Orchestra.\n' "$name" >"$ORCHESTRA_DIR/$pf"
        } ;;
   esac
   printf '%s\t%s' "$role" "$pf"
@@ -417,7 +495,7 @@ agent_add() { # $1 nome  [$2 backend]  [$3 role]  [$4 texto do prompt]
   [ "$rc" = 0 ] || { echo "❌ falha ao registrar '$name'" >&2; return 1; }
   echo "✔ agente '$name' criado ($backend · $role)"
   if [ -n "$pf" ]; then
-    echo "  prompt em: $pf (edite à vontade)"
+    echo "  prompt em: $(team_prompt_path "$pf") (edite à vontade)"
     # sem descrição o agente é genérico E o líder não sabe quando usá-lo
     if [ -z "$text" ]; then
       echo "  ⚠️  ele ainda não tem especialidade: o líder vai vê-lo como 'agente customizado'."
@@ -563,7 +641,18 @@ select_team() {
   # sem terminal controlador (pipe/CI) ou com o time já fixado por env: não abre UI
   if [ -n "$ORCHESTRA_TEAM" ] || ! ( : >/dev/tty ) 2>/dev/null; then return 0; fi
 
-  local names=() backends=() roles=() row=0 nrows key k2 i
+  local names=() backends=() roles=() row=0 nrows key k2 i drawn=0
+  # Quanto esperar pelo resto de uma sequência de seta depois do Esc. O bash 3.2
+  # (o que o macOS traz em /bin/bash) NÃO aceita timeout fracionário em 'read -t':
+  # ele recusa "0.05" com "invalid timeout specification", devolve 1 na hora e
+  # deixa k2 vazio — que é justamente o caso "Esc sozinho". Resultado: TODA seta
+  # fechava o menu (select_team retornava 2 e o zellij nem abria). Detectamos uma
+  # vez e caímos para 1s onde a fração não existe; o atraso só aparece no Esc
+  # solitário, porque numa seta os bytes '[A' já estão no buffer.
+  local esc_wait=0.05
+  case "$( { read -rst 0.05 -n1 _ </dev/null; } 2>&1 )" in
+    *'invalid timeout'*) esc_wait=1 ;;
+  esac
   _st_load() {
     names=(leader); backends=("$(team_field leader backend)"); roles=(leader)
     local n
@@ -585,7 +674,9 @@ select_team() {
   }
   _st_render() {
     local i arrow lbl b cell line sep desc
-    _st_t '\033[u\033[J'          # volta à âncora e limpa daqui para baixo
+    # sobe as linhas do desenho anterior e apaga dali para baixo. drawn=0 significa
+    # "não há desenho anterior aqui" (1ª vez, ou logo depois das perguntas do a/d).
+    [ "$drawn" -gt 0 ] && _st_t '\033[%dA\r\033[J' "$drawn"
     _st_t '   \033[2m%s %s %s\033[0m\n' \
       "$(_pad AGENTE 14)" "$(_pad "O QUE FAZ" 30)" "IA QUE RODA"
     for i in "${!names[@]}"; do
@@ -611,9 +702,18 @@ select_team() {
     _st_t '\033[K\n'
     _st_t '   \033[2m↑/↓ navegar · ←/→ trocar a IA · a adicionar · d remover\033[0m\033[K\n'
     _st_t '   \033[2mEnter abre o time no zellij · q sai sem abrir\033[0m\033[K\n'
+    # cabeçalho + agentes + branco + adicionar + sair + branco + 2 de ajuda
+    drawn=$(( ${#names[@]} + 7 ))
+  }
+  # apaga o menu da tela (usado antes das perguntas do 'a'/'d', que passam a ser
+  # impressas no lugar dele em vez de empilhar embaixo)
+  _st_erase() {
+    [ "$drawn" -gt 0 ] && _st_t '\033[%dA\r\033[J' "$drawn"
+    drawn=0
   }
   _st_add() {
     local name backend role
+    _st_erase
     _st_t '\033[?25h\n'
     # o nome vira argumento de comando ('orchestra send <nome>'), por isso a regra
     # é estrita. Explicamos ANTES e deixamos tentar de novo, em vez de só recusar.
@@ -655,7 +755,8 @@ select_team() {
          printf '                  quando usá-lo (ex.: "Abre e atualiza Pull Requests via gh")\033[0m\n  ▸ ' >/dev/tty
          read -r text </dev/tty || text=""
          if [ -z "$text" ]; then
-           printf '  \033[2m⚠️  sem descrição ele fica genérico; edite depois em .orchestra/prompts/%s.md\033[0m\n' "$name" >/dev/tty
+           printf '  \033[2m⚠️  sem descrição ele fica genérico; edite depois em %s/%s.md\033[0m\n' \
+             "$(team_prompts)" "$name" >/dev/tty
            sleep 2
          fi ;;
     esac
@@ -665,6 +766,7 @@ select_team() {
   _st_del() {
     [ "$row" -lt "${#names[@]}" ] || return 0
     [ "${roles[$row]}" = leader ] && return 0
+    _st_erase
     agent_rm "${names[$row]}" >/dev/null 2>&1
     _st_load; [ "$row" -ge "$nrows" ] && row=$((nrows-1))
   }
@@ -674,10 +776,13 @@ select_team() {
   _st_t '   \033[2m%s\033[0m\n\n' "$ORCHESTRA_PROJECT"
   _st_t '\033[?25l'
   trap 'printf "\033[?25h" >/dev/tty' RETURN INT
-  # âncora do bloco: cada redesenho volta AQUI e apaga o que houver abaixo. Sem isto,
-  # subir um número fixo de linhas erra a posição depois que o 'a'/'d' imprime perguntas,
-  # e o menu aparece duplicado na tela.
-  _st_t '\033[s'
+  # O redesenho é RELATIVO: sobe 'drawn' linhas a partir de onde o cursor parou (o
+  # fim do menu) e apaga dali para baixo. NÃO usar '\033[s'/'\033[u': a posição que
+  # eles guardam é a linha ABSOLUTA da tela, e quando o menu não cabe na janela o
+  # terminal ROLA — a âncora passa a apontar para o meio do bloco e o redesenho
+  # começa lá, deixando as primeiras linhas do menu antigo acima. Era a duplicação.
+  # A armadilha do movimento relativo (as perguntas do 'a'/'d' deslocam o cursor) é
+  # resolvida por _st_erase + drawn=0, não por posição absoluta.
   _st_render
   local quit=0
   while true; do
@@ -686,7 +791,7 @@ select_team() {
       $'\e')
         # Esc sozinho (sem sequência de seta depois) = sair
         k2=""
-        read -rsn2 -t 0.05 k2 </dev/tty
+        read -rsn2 -t "$esc_wait" k2 </dev/tty
         case "$k2" in
           '[A') row=$(( (row+nrows-1)%nrows )) ;;
           '[B') row=$(( (row+1)%nrows )) ;;
@@ -716,7 +821,7 @@ select_team() {
   # saiu pelo "sair": descarta as trocas de backend feitas na tela e sinaliza
   # cancelamento a quem chamou (o 'up' não abre o zellij).
   if [ "$quit" = 1 ]; then
-    unset -f _st_t _st_cycle _st_render _st_load _st_add _st_del _st_row_add _st_row_quit
+    unset -f _st_t _st_cycle _st_render _st_erase _st_load _st_add _st_del _st_row_add _st_row_quit
     return 2
   fi
 
@@ -724,7 +829,7 @@ select_team() {
   local specs=()
   for i in "${!names[@]}"; do specs+=("${names[$i]}=${backends[$i]}:${roles[$i]}"); done
   team_replace "${specs[@]}"
-  unset -f _st_t _st_cycle _st_render _st_load _st_add _st_del _st_row_add _st_row_quit
+  unset -f _st_t _st_cycle _st_render _st_erase _st_load _st_add _st_del _st_row_add _st_row_quit
 }
 
 # ---------------------------------------------------------------------------
@@ -822,15 +927,28 @@ uninstall() {
 
   # 4) layout do zellij
   rm -f "$HOME/.config/zellij/layouts/orchestra.kdl"
-  # 5) diretórios de config, estado e instalação
+  # 5) o agente que o Orchestra pôs no config do OpenCode
+  remove_reviewer_agent
+  # 6) resíduo das versões em que o time morava dentro do projeto. Sabemos onde os
+  #    projetos ficam porque cada um deixa 'project.path' no seu diretório de estado
+  #    — é o que permite não abandonar um .orchestra/ órfão na máquina do usuário.
+  local pp proj
+  for pp in "$ORCHESTRA_STATE"/projects/*/project.path; do
+    [ -f "$pp" ] || continue
+    proj="$(cat "$pp" 2>/dev/null)"
+    [ -n "$proj" ] && [ -d "$proj/.orchestra" ] \
+      && rm -rf "$proj/.orchestra" && echo "  removido $proj/.orchestra (resíduo de versão antiga)"
+  done
+  # 7) diretórios de config, estado e instalação
   rm -rf "$HOME/.config/orchestra-agents" "$ORCHESTRA_STATE" "$ORCHESTRA_HOME"
   echo "✅ Orchestra Agents removido por completo."
   echo
+  echo "   Removido junto: os times e prompts de TODOS os seus projetos — eles ficavam"
+  echo "   em $ORCHESTRA_STATE/projects/, fora dos projetos, e não sobrou nada na"
+  echo "   pasta de nenhum deles."
+  echo
   echo "   Preservado de propósito:"
-  echo "     · o .orchestra/ dos seus projetos (é a composição do time, sua)"
   echo "     · Claude Code, OpenCode e Codex (ferramentas suas, não do Orchestra)"
-  echo "     · o agente 'reviewer' na config do OpenCode — remova à mão se quiser:"
-  echo "       $(oc_config_path)"
   # o shell guarda em cache o caminho do comando removido; sem isto, um 'orchestra'
   # logo em seguida falha com uma mensagem confusa em vez de 'command not found'.
   echo

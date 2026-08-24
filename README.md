@@ -31,8 +31,9 @@ não muda nada no seu fluxo: os comandos são idênticos.
 ```
 
 Ao rodar `orchestra`, um **menu com setas** deixa você montar o time do projeto: trocar a IA
-de cada agente, adicionar e remover agentes. A composição fica salva em
-`.orchestra/team.json`, **dentro do projeto**, e pode ser versionada com ele.
+de cada agente, adicionar e remover agentes. A composição fica salva **fora do projeto**,
+em `~/.local/state/orchestra-agents/projects/<projeto>/team.json`: o Orchestra não escreve
+nenhum arquivo na pasta do seu código.
 
 ---
 
@@ -151,8 +152,9 @@ orchestra down
 orchestra
 ```
 
-Seu time (`.orchestra/team.json`) e seus prompts continuam onde estão: a atualização não
-mexe neles.
+Seu time e seus prompts continuam onde estão: eles vivem em
+`~/.local/state/orchestra-agents/projects/`, fora da pasta de instalação, e a atualização
+não mexe neles.
 
 ---
 
@@ -181,9 +183,13 @@ O que ele **preserva**, de propósito:
 
 | Preservado | Por quê |
 |------------|---------|
-| `.orchestra/` dos seus projetos | é a composição do seu time, sua e não do Orchestra |
 | Claude Code, OpenCode, Codex | ferramentas suas, usadas fora do Orchestra |
 | zellij que **você** já tinha | só é removido o que o instalador do Orchestra baixou |
+
+Fora isso, `orchestra uninstall` remove **tudo** o que o Orchestra colocou na máquina:
+instalação, times e prompts de todos os projetos, symlink do comando, linhas de PATH nos
+seus `rc`, layout do zellij e o agente `reviewer` que ele adicionou ao config do OpenCode.
+Seus projetos não guardam nada do Orchestra, então não sobra nada neles.
 | agente `reviewer` na config do OpenCode | é uma entrada na sua config; o caminho é mostrado no fim |
 
 > Se for **reinstalar na mesma janela** do terminal, limpe o cache de comandos do shell:
@@ -237,7 +243,7 @@ Para desistir: `q`, `Esc` ou a linha **sair**. Nada é aberto e as trocas feitas
 descartadas.
 
 O time começa com **líder + coder + reviewer** e você ajusta à vontade. A escolha vale para
-**aquele projeto** e fica em `.orchestra/team.json`.
+**aquele projeto** e fica em `~/.local/state/orchestra-agents/projects/<projeto>/team.json`.
 
 > **Time inteiro num comando** (útil em projeto novo, e para pular o menu em CI):
 >
@@ -247,7 +253,7 @@ O time começa com **líder + coder + reviewer** e você ajusta à vontade. A es
 >
 > Sintaxe: `nome=ia` ou `nome=ia:papel`. O sufixo deixa um nome livre herdar um
 > preset (`qa=claude:tester`). Nome sem preset e sem sufixo vira `custom`, com prompt
-> editável em `.orchestra/prompts/<nome>.md`.
+> editável em `~/.local/state/orchestra-agents/projects/<projeto>/prompts/<nome>.md`.
 
 ### Papéis prontos
 
@@ -275,8 +281,9 @@ orchestra add gitops --ia claude \
 orchestra rm gitops
 ```
 
-Sem `--prompt`, o agente custom nasce com um arquivo em `.orchestra/prompts/<nome>.md`
-para você escrever depois. No menu, o `a` pergunta a mesma coisa: **nome → função → IA →
+Sem `--prompt`, o agente custom nasce com um arquivo em `prompts/<nome>.md` (dentro do
+diretório do projeto no Orchestra; o `add` mostra o caminho completo) para você escrever
+depois. No menu, o `a` pergunta a mesma coisa: **nome → função → IA →
 o que ele faz**. A IA nunca é adivinhada pelo nome: é sempre escolha sua.
 
 O nome vira argumento de comando (`orchestra send deploy-prod "…"`), então segue uma regra
@@ -465,14 +472,23 @@ ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # opcional: fixa o modelo dos ag
 ORCHESTRA_TIMEOUT=600                           # opcional: tarefas longas
 ```
 
-### O que fica dentro do projeto
+### Onde o Orchestra guarda as coisas
+
+**Nada** vai para a pasta do seu projeto. Cada projeto ganha um diretório próprio no estado
+do Orchestra, identificado pelo nome da pasta + um checksum do caminho (assim
+`~/cliente-a/api` e `~/cliente-b/api` não se misturam):
 
 ```
-meu-projeto/.orchestra/
-├── team.json         # composição do time (VERSIONÁVEL)
-├── prompts/<nome>.md # prompts dos agentes custom (VERSIONÁVEL)
-└── run/              # runtime descartável (gitignorado automaticamente)
+~/.local/state/orchestra-agents/projects/meu-projeto-1234567/
+├── team.json         # composição do time
+├── project.path      # a que projeto este diretório pertence
+├── prompts/<nome>.md # prompts dos agentes custom
+└── run/              # runtime descartável
 ```
+
+> Quem usou versões anteriores tinha isso em `<projeto>/.orchestra/`. Na primeira vez que
+> você abrir o projeto, o Orchestra move o time e os prompts para o novo lugar sozinho e
+> limpa a pasta do projeto — você não perde nada.
 
 ---
 
@@ -485,7 +501,7 @@ orchestra-agents/
 ├── bin/orchestra                # CLI
 ├── lib/
 │   ├── core.sh                  # núcleo: despacho, resultados, gestão do time, doctor
-│   ├── team.sh                  # modelo do time (.orchestra/team.json) e prompts
+│   ├── team.sh                  # modelo do time (team.json) e prompts
 │   ├── mux.sh                   # abstração do multiplexador (zellij | stub)
 │   └── layout.sh                # gera o layout KDL do time
 ├── agents/

@@ -151,6 +151,10 @@ launch_opencode() {
 
 launch_codex() {
   local sid args=(-C "$PROJ" -a never -s "$(codex_sandbox_for "$ROLE")" --no-alt-screen)
+  # o runtime do Orchestra mora fora do projeto: sem abri-lo no sandbox o worker
+  # não consegue gravar a resposta do 'orchestra done'
+  local wr; wr="$(codex_writable_roots_arg)"
+  [ -n "$wr" ] && args+=(-c "$wr")
   [ -n "$ORCHESTRA_CODEX_MODEL" ] && args+=(-m "$ORCHESTRA_CODEX_MODEL")
   if [ "$1" = resume ]; then
     sid="$(cat "$(_codex_session_file)" 2>/dev/null)"

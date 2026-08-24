@@ -29,11 +29,17 @@ mux_backend() { echo "$ORCHESTRA_MUX"; }
 # helpers comuns
 # ---------------------------------------------------------------------------
 
-# diretório de runtime dos agentes (definido por core.sh; fallback defensivo)
+# diretório de runtime dos agentes (definido por core.sh; fallback defensivo).
+# Fica FORA do projeto: $ORCHESTRA_STATE/projects/<slug>/run — a raiz do projeto do
+# usuário não recebe nenhum arquivo do Orchestra.
 _mux_run_dir() {
   if [ -n "${ORCHESTRA_RUN_DIR:-}" ]; then echo "$ORCHESTRA_RUN_DIR"; return; fi
-  local p; p="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"; [ -n "$p" ] || p="$PWD"
-  echo "$p/.orchestra/run"
+  local p slug hash
+  p="$(cat "$ORCHESTRA_STATE/project" 2>/dev/null)"; [ -n "$p" ] || p="$PWD"
+  slug="$(printf '%s' "$(basename "$p")" | tr -c 'a-zA-Z0-9_-' '-')"
+  while [ -n "$slug" ] && [ "${slug%-}" != "$slug" ]; do slug="${slug%-}"; done
+  hash="$(printf '%s' "$p" | cksum | cut -d' ' -f1)"
+  echo "$ORCHESTRA_STATE/projects/${slug:-projeto}-${hash}/run"
 }
 
 _mux_pane_file() { echo "$(_mux_run_dir)/${1}.pane"; }

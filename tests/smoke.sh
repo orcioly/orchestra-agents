@@ -15,6 +15,10 @@ export ORCHESTRA_PROJECT="$(mktemp -d)"
 export ORCHESTRA_MUX=stub
 ORCH="$ROOT/bin/orchestra"
 
+# Diretório do projeto no Orchestra. NÃO fica mais dentro do projeto do usuário:
+# perguntamos à própria lib onde ele é, para o teste não duplicar a regra do slug.
+ODIR="$(. "$ROOT/lib/core.sh" >/dev/null 2>&1; echo "$ORCHESTRA_DIR")"
+
 # Backends FALSOS no PATH. 'agent_add' recusa uma IA que não esteja instalada, então
 # sem isto a suíte só passa em máquina que tenha claude+opencode+codex — foi o que
 # derrubou o CI. Os stubs nunca são executados: os testes rodam com o multiplexador
@@ -83,7 +87,7 @@ e_ok=1
 # nome sem preset criado por env deve virar custom COM prompt editável
 ( ORCHESTRA_TEAM="seguranca=claude"; _apply_team_env ) >/dev/null 2>&1
 [ "$(team_field seguranca role)" = custom ] || { no "agente por env sem preset deveria ser custom"; e_ok=0; }
-[ -f "$ORCHESTRA_PROJECT/.orchestra/prompts/seguranca.md" ] \
+[ -f "$ODIR/prompts/seguranca.md" ] \
   || { no "agente custom por env ficou sem arquivo de prompt"; e_ok=0; }
 "$ORCH" rm qa >/dev/null 2>&1; "$ORCH" rm seguranca >/dev/null 2>&1
 team_set leader backend claude >/dev/null 2>&1
@@ -96,7 +100,7 @@ team_exists tester || { no "tester não entrou no time"; a_ok=0; }
 [ "$(team_field tester role)" = tester ] || { no "papel do tester incorreto"; a_ok=0; }
 "$ORCH" add seo --backend claude >/dev/null 2>&1 || { no "add custom falhou"; a_ok=0; }
 [ "$(team_field seo role)" = custom ] || { no "agente sem preset deveria virar custom"; a_ok=0; }
-[ -f "$ORCHESTRA_PROJECT/.orchestra/prompts/seo.md" ] || { no "prompt do agente custom não foi criado"; a_ok=0; }
+[ -f "$ODIR/prompts/seo.md" ] || { no "prompt do agente custom não foi criado"; a_ok=0; }
 "$ORCH" add tester >/dev/null 2>&1 && { no "add duplicado deveria falhar"; a_ok=0; }
 "$ORCH" add "Nome Inválido" >/dev/null 2>&1 && { no "add com nome inválido deveria falhar"; a_ok=0; }
 # o motivo precisa ser dito ao usuário, não só recusado.
@@ -116,7 +120,7 @@ team_exists seo && { no "seo continuou no time após rm"; a_ok=0; }
 "$ORCH" add gitops --backend claude --prompt "Só faz commit e push." >/dev/null 2>&1 \
   || { no "add --prompt falhou"; a_ok=0; }
 [ "$(team_field gitops role)" = custom ] || { no "--prompt deveria criar agente custom"; a_ok=0; }
-grep -q 'Só faz commit e push.' "$ORCHESTRA_PROJECT/.orchestra/prompts/gitops.md" 2>/dev/null \
+grep -q 'Só faz commit e push.' "$ODIR/prompts/gitops.md" 2>/dev/null \
   || { no "--prompt não gravou as instruções do usuário"; a_ok=0; }
 case "$(team_prompt_for gitops)" in
   *'orchestra done gitops'*) ;;
@@ -216,13 +220,13 @@ case "$msg" in *'ainda não tem especialidade'*) ;; *) no "criar custom sem desc
 echo "6) Ciclo completo: send → done → await"
 c_ok=1
 "$ORCH" send tester "rode os testes" >/dev/null 2>&1 || { no "send falhou"; c_ok=0; }
-TASK="$(cat "$ORCHESTRA_PROJECT/.orchestra/run/tester.task" 2>/dev/null)"
+TASK="$(cat "$ODIR/run/tester.task" 2>/dev/null)"
 [ -n "$TASK" ] || { no "task id não foi gravado"; c_ok=0; }
-[ "$(cat "$ORCHESTRA_PROJECT/.orchestra/run/tester.status" 2>/dev/null)" = running ] \
+[ "$(cat "$ODIR/run/tester.status" 2>/dev/null)" = running ] \
   || { no "status deveria ser 'running' após o send"; c_ok=0; }
-grep -q "ORCHESTRA task=$TASK" "$ORCHESTRA_PROJECT/.orchestra/run/tester.tx" 2>/dev/null \
+grep -q "ORCHESTRA task=$TASK" "$ODIR/run/tester.tx" 2>/dev/null \
   || { no "o rodapé com o task id não foi injetado no painel"; c_ok=0; }
-grep -q "rode os testes" "$ORCHESTRA_PROJECT/.orchestra/run/tester.tx" 2>/dev/null \
+grep -q "rode os testes" "$ODIR/run/tester.tx" 2>/dev/null \
   || { no "a tarefa não foi injetada no painel"; c_ok=0; }
 echo "resposta errada" | "$ORCH" done tester TASK-ERRADA >/dev/null 2>&1 \
   && { no "done com task divergente deveria ser recusado"; c_ok=0; }
@@ -440,6 +444,90 @@ chosen="$(printf '%s\n' "$probe" | tail -1)"
 [ -n "$chosen" ] && [ "${#chosen}" -le 24 ] \
   || { no "mux_session_name devolveu '$chosen' (${#chosen} chars) onde o teto é 24"; n_ok=0; }
 [ "$n_ok" = 1 ] && ok "nome de sessão encurta sozinho e segue estável por projeto"
+
+# ---------------------------------------------------------------------------
+echo "15) Menu de composição: setas e redesenho"
+# O menu só falha num terminal de verdade, então este caso o dirige por um pty
+# (tests/menu_pty.py explica cada armadilha). Cobre a seta que fechava o menu no
+# bash 3.2 do macOS e a âncora absoluta que duplicava o bloco quando a tela rolava.
+m_ok=1
+if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
+  MENUPROJ="$(mktemp -d)"
+  menu_out="$(python3 "$ROOT/tests/menu_pty.py" "$ROOT" "$MENUPROJ" 2>/dev/null)"
+  rm -rf "$MENUPROJ"
+  case "$menu_out" in
+    *MENU_MORREU*)      no "a seta ↓ fecha o menu (timeout fracionário em 'read -t')"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *TIMEOUT_INVALIDO*) no "'read -t' recusou o timeout — a detecção de fração não pegou"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *ANCORA_ABSOLUTA*)  no "o menu voltou a usar \033[u — com scroll ele se duplica na tela"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *REDESENHO_RELATIVO*) ;;
+    *) no "o redesenho não é relativo (\033[<n>A ausente)"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *CHEGOU_NO_ADICIONAR*) ;;
+    *) no "a seta ↓ não chega em '+ adicionar agente'"; m_ok=0 ;;
+  esac
+  [ "$m_ok" = 1 ] && ok "setas navegam até o fim do menu e o redesenho não deixa sobra"
+else
+  skipt "python3 ou /bin/bash ausente — menu de composição não exercitado"
+fi
+
+# ---------------------------------------------------------------------------
+echo "16) Nada é escrito na raiz do projeto"
+r_ok=1
+# o projeto do usuário não recebe UM arquivo sequer do Orchestra
+sujeira="$(ls -A "$ORCHESTRA_PROJECT" 2>/dev/null)"
+[ -z "$sujeira" ] || { no "o Orchestra deixou arquivos na raiz do projeto: $sujeira"; r_ok=0; }
+case "$ODIR" in
+  "$ORCHESTRA_STATE"/projects/*) ;;
+  *) no "ORCHESTRA_DIR devia ficar em \$ORCHESTRA_STATE/projects/<slug>, veio '$ODIR'"; r_ok=0 ;;
+esac
+[ -f "$ODIR/project.path" ] && [ "$(cat "$ODIR/project.path")" = "$ORCHESTRA_PROJECT" ] \
+  || { no "project.path não aponta para o projeto (o uninstall depende dele)"; r_ok=0; }
+# dois projetos de mesmo nome em pastas diferentes não dividem o mesmo time
+sl_a="$(ORCHESTRA_PROJECT=/tmp/cliente-a/api bash -c '. "'"$ROOT"'/lib/core.sh" >/dev/null 2>&1; basename "$ORCHESTRA_DIR"')"
+sl_b="$(ORCHESTRA_PROJECT=/tmp/cliente-b/api bash -c '. "'"$ROOT"'/lib/core.sh" >/dev/null 2>&1; basename "$ORCHESTRA_DIR"')"
+[ -n "$sl_a" ] && [ "$sl_a" != "$sl_b" ] \
+  || { no "projetos homônimos em pastas diferentes colidiram no mesmo slug ($sl_a)"; r_ok=0; }
+# migração: quem já tinha <projeto>/.orchestra não perde time nem prompt
+MIGPROJ="$(mktemp -d)"; MIGSTATE="$(mktemp -d)"
+mkdir -p "$MIGPROJ/.orchestra/prompts"
+printf 'run/\n' >"$MIGPROJ/.orchestra/.gitignore"
+printf 'linha 1\nfaz deploy de produção\n' >"$MIGPROJ/.orchestra/prompts/velho.md"
+cat >"$MIGPROJ/.orchestra/team.json" <<'JSON'
+{"version":1,"leader":{"name":"leader","backend":"codex","role":"leader"},
+ "agents":[{"name":"velho","backend":"claude","role":"custom","prompt_file":".orchestra/prompts/velho.md"}]}
+JSON
+mig="$(ORCHESTRA_STATE="$MIGSTATE" ORCHESTRA_PROJECT="$MIGPROJ" bash -c '
+  . "'"$ROOT"'/lib/core.sh" >/dev/null 2>&1
+  printf "%s|%s|%s\n" "$(team_names | tr "\n" " ")" "$(team_field leader backend)" "$(role_summary velho)"')"
+case "$mig" in
+  "velho |codex|faz deploy de produção") ;;
+  *) no "migração do .orchestra legado perdeu dados (veio '$mig')"; r_ok=0 ;;
+esac
+[ -e "$MIGPROJ/.orchestra" ] && { no "a migração deixou o .orchestra antigo no projeto"; r_ok=0; }
+rm -rf "$MIGPROJ" "$MIGSTATE"
+[ "$r_ok" = 1 ] && ok "time/prompts/runtime fora do projeto, sem colisão e com migração do legado"
+
+# ---------------------------------------------------------------------------
+echo "17) Sandbox do Codex alcança o runtime"
+c_ok=1
+# o runtime saiu do projeto e 'workspace-write' só libera o workspace: sem abrir o
+# diretório do Orchestra, o 'orchestra done' de um worker codex morre em
+# "Operation not permitted" e todo despacho para ele vira timeout.
+wr="$(. "$ROOT/lib/core.sh" >/dev/null 2>&1; codex_writable_roots_arg)"
+case "$wr" in
+  'sandbox_workspace_write.writable_roots=["'"$ODIR"'"]') ;;
+  *) no "codex_writable_roots_arg não aponta para \$ORCHESTRA_DIR (veio '$wr')"; c_ok=0 ;;
+esac
+grep -q 'codex_writable_roots_arg' "$ROOT/agents/run-agent.sh" \
+  || { no "run-agent.sh não passa writable_roots ao codex"; c_ok=0; }
+[ "$c_ok" = 1 ] && ok "codex recebe o runtime como writable_root"
 
 # ---------------------------------------------------------------------------
 printf '\nResultado: \033[1;32m%d passou\033[0m · \033[1;31m%d falhou\033[0m · \033[1;33m%d pulado\033[0m\n\n' \

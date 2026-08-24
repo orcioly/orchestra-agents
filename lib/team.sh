@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Orchestra Agents — modelo do TIME (líder + N agentes), por projeto.
 #
-# O time vive em <projeto>/.orchestra/team.json. Cada agente tem:
+# O time vive em $ORCHESTRA_STATE/projects/<slug>/team.json, FORA do projeto do
+# usuário. Cada agente tem:
 #   name    — identificador usado em 'orchestra send <name>'
 #   backend — claude | opencode | codex
 #   role    — preset (coder, reviewer, tester, docs, architect, devops) ou 'custom'
-#   prompt_file — só p/ role=custom: caminho relativo ao projeto
+#   prompt_file — só p/ role=custom: caminho relativo a $ORCHESTRA_DIR
 #
 # Não executar diretamente; é "sourced" pelo lib/core.sh.
 
@@ -53,7 +54,7 @@ role_summary() { # $1 agente
   if [ "$r" != custom ]; then role_desc "$r"; return 0; fi
   pf="$(team_field "$1" prompt_file)"
   if [ -n "$pf" ]; then
-    f="$pf"; case "$f" in /*) ;; *) f="$ORCHESTRA_PROJECT/$f" ;; esac
+    f="$(team_prompt_path "$pf")"
     line="$(sed -n '2,$p' "$f" 2>/dev/null | sed '/^$/d' | head -1)"
   fi
   [ -n "$line" ] || line="$(role_desc custom)"
@@ -62,6 +63,20 @@ role_summary() { # $1 agente
 
 team_file()    { echo "$ORCHESTRA_DIR/team.json"; }
 team_prompts() { echo "$ORCHESTRA_DIR/prompts"; }
+
+# Caminho absoluto de um prompt_file. O campo é RELATIVO a $ORCHESTRA_DIR
+# ("prompts/<nome>.md"). Times gravados antes da mudança guardavam
+# ".orchestra/prompts/<nome>.md" (relativo ao projeto); a migração move o arquivo,
+# então basta descartar o prefixo antigo em vez de reescrever o team.json.
+team_prompt_path() { # $1 prompt_file
+  local pf="${1:-}"
+  [ -n "$pf" ] || return 1
+  case "$pf" in
+    /*) printf '%s' "$pf" ;;
+    .orchestra/*) printf '%s/%s' "$ORCHESTRA_DIR" "${pf#.orchestra/}" ;;
+    *)  printf '%s/%s' "$ORCHESTRA_DIR" "$pf" ;;
+  esac
+}
 
 # roda um trecho python com o team.json no stdin e o caminho no argv[1]
 _team_py() { # $1 script python  $@ args extras
@@ -95,8 +110,9 @@ def find(name):
 
 # cria o time padrão se ainda não existir (líder claude + coder + reviewer)
 team_ensure() {
-  [ -f "$(team_file)" ] && return 0
+  [ -f "$(team_file)" ] && { _orchestra_stamp_project 2>/dev/null; return 0; }
   mkdir -p "$ORCHESTRA_DIR"
+  _orchestra_stamp_project 2>/dev/null
   cat >"$(team_file)" <<'JSON'
 {
   "version": 1,
@@ -259,7 +275,7 @@ team_prompt_for() { # $1 nome
   role="$(team_field "$name" role)"
   pf="$(team_field "$name" prompt_file)"
   if [ -n "$pf" ]; then
-    f="$pf"; case "$f" in /*) ;; *) f="$ORCHESTRA_PROJECT/$f" ;; esac
+    f="$(team_prompt_path "$pf")"
   else
     f="$ORCHESTRA_HOME/agents/roles/${role}.md"
   fi

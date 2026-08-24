@@ -38,7 +38,7 @@ uso:
 
 papéis prontos: coder, reviewer, tester, docs, architect, devops
                 (qualquer outro nome vira um agente 'custom' com prompt editável
-                 em .orchestra/prompts/<nome>.md)
+                 com prompt editável, o 'add' mostra onde)
 
 exemplos:
   orchestra
@@ -89,9 +89,8 @@ case "$cmd" in
       exit 1
     fi
     printf '%s' "$ORCHESTRA_PROJECT" >"$ORCHESTRA_STATE/project"
+    # tudo fora do projeto: nada de .gitignore, nada na raiz do usuário
     mkdir -p "$ORCHESTRA_RUN_DIR"
-    # o runtime é descartável; o time (team.json/prompts) é versionável
-    printf 'run/\n' >"$ORCHESTRA_DIR/.gitignore"
     echo "🎼 subindo Orchestra no projeto: $ORCHESTRA_PROJECT"
 
     team_ensure
