@@ -593,12 +593,11 @@ me_ok=1
 # de teste incluído, sem abrir a exceção conveniente de "testes não contam".
 MENU_OWNER="lib/menu.sh"
 
-# Isenção TEMPORÁRIA, com prazo mecânico: select_team() ainda hospeda o motor antigo
-# em lib/core.sh e só o perde na migração. Até lá ele fica fora da Regra 1 — mas a
-# isenção EXPIRA SOZINHA: quando o arquivo isento não tiver mais nenhum padrão do
-# motor, este teste falha pedindo que a isenção saia junto. É dívida com validade,
-# vencendo por conta própria, em vez de um "remover depois" que ninguém lê.
-MENU_EXEMPT="lib/core.sh"
+# Isenção TEMPORÁRIA, com prazo mecânico: existiu enquanto select_team() hospedava
+# o motor antigo em lib/core.sh (OAV2-2 migrou para lib/menu.sh). Vazia agora que o
+# arquivo isento não tem mais nenhum padrão do motor — é o prazo vencendo por conta
+# própria, em vez de um "remover depois" que ninguém lê.
+MENU_EXEMPT=""
 
 _menu_engine_patterns() { # regex TAB o-que-é TAB onde-pode TAB o-que-usar TAB por-que-dói
   printf '%s\t%s\t%s\t%s\t%s\n' \

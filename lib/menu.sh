@@ -89,8 +89,18 @@ menu_read_key() { # $1 nome da variável — lê uma tecla e devolve o nome dela
         '[B') __mrk_key=down ;;
         '[C') __mrk_key=right ;;
         '[D') __mrk_key=left ;;
-        # Esc solitário, ou uma sequência que não sabemos ler: ambos são "esc".
-        *)    __mrk_key=esc ;;
+        # Vazio = o 'read' do resto não trouxe NADA dentro do timeout: é Esc
+        # sozinho, quem chama trata como cancelar.
+        '')   __mrk_key=esc ;;
+        # Não-vazio mas não é seta: reconhecemos que veio uma sequência (Delete,
+        # Home/End, PageUp/PageDown, F1-F12, ou uma seta em modo aplicação/DECCKM
+        # como '\eOB') sem saber que tecla é. NÃO pode virar "esc": o desenho na
+        # tela é idêntico ao de apertar Esc de verdade, mas a intenção do usuário
+        # é outra — e a ajuda do menu diz "d remover", então procurar a tecla
+        # Delete é o erro mais natural do mundo. Se isto colapsasse em "esc", quem
+        # chama cancelaria a sessão inteira ao apertar Delete. "unknown" deixa
+        # quem chama decidir (tipicamente: ignorar e continuar).
+        *)    __mrk_key=unknown ;;
       esac ;;
     '')  __mrk_key=enter ;;
     ' ') __mrk_key=space ;;
