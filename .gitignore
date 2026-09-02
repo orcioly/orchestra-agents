@@ -21,3 +21,6 @@ CLAUDE.local.md
 # Python bytecode cache (gerado ao importar merge_reviewer em testes)
 __pycache__/
 *.pyc
+
+# knowledge graph do graphify (gerado; os hooks post-checkout/post-commit reconstroem)
+graphify-out/
