@@ -71,36 +71,116 @@ menu_esc_wait() { # ecoa o timeout de Esc que este bash aceita: 0.05 ou 1
   printf '%s' "$_MENU_ESC_WAIT"
 }
 
+_menu_drain_csi() { # $1 nome da variável — já contém o byte introdutor ('[' ou 'O')
+  # Uma sequência CSI ('\e[…') ou SS3 ('\eO.') termina no primeiro byte na
+  # faixa 0x40-0x7E ('@'-'~'), tudo antes disso (dígitos, ';', outros
+  # separadores) é parâmetro. DRENAR até achar esse terminador é o que evita a
+  # sobra (OAV2-25): sem isso, sequências com mais de 2 bytes — Shift/Ctrl/Alt+
+  # seta ('\e[1;2D'), Delete ('\e[3~'), PageUp/Down, Insert, F5-F12 — deixavam
+  # o resto no buffer do terminal para o PRÓXIMO giro do laço ler como tecla
+  # SOLTA. Quando a sobra continha uma letra que batia com um atalho do menu,
+  # ela disparava aquele atalho sem o usuário ter pedido: o 'D' de Shift+
+  # Esquerda apagava o agente sob o cursor, o 'A' de Ctrl+Cima abria o prompt
+  # de adicionar. Comparamos por ORDINAL (printf '%d'), não por '[@-~]': um
+  # range de colação depende de LC_COLLATE, ordinal não depende de locale
+  # nenhum. Função própria (e não laço inline) porque menu_read_key precisa
+  # dela em DOIS pontos: a seta direta e a variante ESC-prefixada de Alt+seta;
+  # duplicar o laço é como uma cópia diverge da outra sem ninguém notar.
+  #
+  # 'IFS=' no read: sem isso, um byte 0x20 (espaço) — parâmetro intermediário
+  # legítimo de CSI, ex.: '\e[2 q' (estilo do cursor) — vira variável VAZIA
+  # (bash usa $IFS pra separar campos e descarta espaço nas bordas do que leu),
+  # e o laço confunde "li um espaço" com "não chegou nada" (achado do revisor
+  # na revisão da OAV2-25, mesmo modo de falha que ela existe pra eliminar: um
+  # byte vira comando fantasma no giro seguinte). O MESMO 'IFS=' vale nos
+  # outros dois reads de byte único do caminho ESC (menu_read_key).
+  #
+  # Teto de 64 (era 16): a sequência SGR de clique de mouse chega a 15 bytes
+  # de parâmetro, então 16 já passava raspando um produtor REAL. 64 fica bem
+  # acima de qualquer sequência conhecida sem abrir espera indefinida — o
+  # teto só existe contra um fluxo interminável de bytes válidos (que não
+  # acontece na prática); cada volta já tem o timeout do A1 por conta própria.
+  local __mdc_var="$1" __mdc_acc="${!1}" __mdc_byte __mdc_ord __mdc_n=0
+  while [ "$__mdc_n" -lt 64 ]; do
+    __mdc_byte=""
+    IFS= read -rsn1 -t "$_MENU_ESC_WAIT" __mdc_byte </dev/tty || break
+    [ -n "$__mdc_byte" ] || break
+    __mdc_acc="$__mdc_acc$__mdc_byte"
+    __mdc_n=$((__mdc_n + 1))
+    __mdc_ord="$(printf '%d' "'$__mdc_byte")"
+    [ "$__mdc_ord" -ge 64 ] && [ "$__mdc_ord" -le 126 ] && break
+  done
+  printf -v "$__mdc_var" '%s' "$__mdc_acc"
+}
+
 menu_read_key() { # $1 nome da variável — lê uma tecla e devolve o nome dela
-  local __mrk_var="$1" __mrk_key __mrk_rest
+  local __mrk_var="$1" __mrk_key __mrk_rest __mrk_chain
   IFS= read -rsn1 __mrk_key </dev/tty || return 1
   case "$__mrk_key" in
     $'\e')
-      # Esc e as setas começam com o MESMO byte. O que distingue é o resto chegar
-      # ou não dentro do timeout — e o timeout tem de ser o que ESTE bash aceita.
+      # Esc e as setas (e qualquer outra sequência CSI/SS3) começam com o MESMO
+      # byte. O que distingue Esc sozinho do resto é o próximo byte chegar ou não
+      # dentro do timeout — e o timeout tem de ser o que ESTE bash aceita (A1).
       # Chamamos _menu_esc_detect direto, e não "$(menu_esc_wait)": a substituição
       # de comando roda em subshell, então a memória ficaria lá e a detecção se
       # repetiria a cada tecla.
       _menu_esc_detect
       __mrk_rest=""
-      read -rsn2 -t "$_MENU_ESC_WAIT" __mrk_rest </dev/tty
+      IFS= read -rsn1 -t "$_MENU_ESC_WAIT" __mrk_rest </dev/tty
+      # ESC-prefixado (OAV2-25, achado do revisor): Alt+seta chega com um ESC A
+      # MAIS na frente da sequência normal ('\e\e[D' para Alt+Esquerda) em
+      # iTerm2 (modo "Esc+"), Terminal.app com Option=Meta e xterm com
+      # metaSendsEscape. O byte após o 1º ESC é, ele mesmo, OUTRO ESC — nem '['
+      # nem 'O' — e sem tratar isso aqui a sequência de verdade ('[D') ficava
+      # intacta no buffer para o giro seguinte, que a lia como tecla SOLTA: o
+      # 'D' caía no ramo d/D do menu e apagava o agente sob o cursor, sem
+      # confirmação. Drenamos o(s) ESC extra do MESMO jeito que o Esc solitário
+      # — lendo o próximo byte com o timeout do A1 — até achar '[' ou 'O' (aí
+      # vira o mesmo laço de drenagem de CSI/SS3) ou esgotar o teto de 3 voltas,
+      # que existe só para não abrir espera longa em ESCs encadeados: cada
+      # volta já usa o timeout de _menu_esc_detect, nunca uma espera indefinida.
+      __mrk_chain=0
+      while [ "$__mrk_rest" = $'\e' ] && [ "$__mrk_chain" -lt 3 ]; do
+        __mrk_chain=$((__mrk_chain + 1))
+        __mrk_rest=""
+        IFS= read -rsn1 -t "$_MENU_ESC_WAIT" __mrk_rest </dev/tty
+      done
       case "$__mrk_rest" in
-        '[A') __mrk_key=up ;;
-        '[B') __mrk_key=down ;;
-        '[C') __mrk_key=right ;;
-        '[D') __mrk_key=left ;;
-        # Vazio = o 'read' do resto não trouxe NADA dentro do timeout: é Esc
-        # sozinho, quem chama trata como cancelar.
-        '')   __mrk_key=esc ;;
-        # Não-vazio mas não é seta: reconhecemos que veio uma sequência (Delete,
-        # Home/End, PageUp/PageDown, F1-F12, ou uma seta em modo aplicação/DECCKM
-        # como '\eOB') sem saber que tecla é. NÃO pode virar "esc": o desenho na
-        # tela é idêntico ao de apertar Esc de verdade, mas a intenção do usuário
-        # é outra — e a ajuda do menu diz "d remover", então procurar a tecla
-        # Delete é o erro mais natural do mundo. Se isto colapsasse em "esc", quem
-        # chama cancelaria a sessão inteira ao apertar Delete. "unknown" deixa
-        # quem chama decidir (tipicamente: ignorar e continuar).
-        *)    __mrk_key=unknown ;;
+        # Vazio = nada chegou dentro do timeout: é Esc sozinho, quem chama trata
+        # como cancelar.
+        '') __mrk_key=esc ;;
+        '['|'O')
+          _menu_drain_csi __mrk_rest
+          if [ "$__mrk_chain" -gt 0 ]; then
+            # Só chegou aqui atravessando um ESC extra: é Alt+seta (ou outro
+            # Alt+CSI), não a seta direta. Já está drenada por inteiro (sem
+            # sobra), mas fica "unknown" de propósito — fazer isto navegar
+            # seria ampliar comportamento que nunca existiu; não é o defeito
+            # desta task.
+            __mrk_key=unknown
+          else
+            # Sequência reconhecida (por completo) mas não é seta: Delete,
+            # Home/End, PageUp/PageDown, F1-F12, seta em modo aplicação, ou uma
+            # combinação de modificador ('\e[1;2D'). NÃO pode virar "esc": o
+            # desenho na tela é idêntico ao de apertar Esc de verdade, mas a
+            # intenção do usuário é outra — e a ajuda do menu diz "d remover",
+            # então procurar a tecla Delete é o erro mais natural do mundo. Se
+            # isto colapsasse em "esc", quem chama cancelaria a sessão inteira ao
+            # apertar Delete. "unknown" deixa quem chama decidir (tipicamente:
+            # ignorar e continuar) — e agora sem deixar sobra para o próximo giro.
+            case "$__mrk_rest" in
+              '[A') __mrk_key=up ;;
+              '[B') __mrk_key=down ;;
+              '[C') __mrk_key=right ;;
+              '[D') __mrk_key=left ;;
+              *)    __mrk_key=unknown ;;
+            esac
+          fi ;;
+        # Não é '[' nem 'O' (e não é outro ESC, ou o teto do laço acima
+        # esgotou): não sabemos que sequência é (ex.: Alt+tecla comum, que
+        # manda só ESC + a letra, sem CSI nenhum para drenar) — o byte já foi
+        # lido por inteiro, nada sobra.
+        *) __mrk_key=unknown ;;
       esac ;;
     '')  __mrk_key=enter ;;
     ' ') __mrk_key=space ;;

@@ -729,6 +729,115 @@ grep -q 'POR QUE ESTE ARQUIVO EXISTE' "$ROOT/lib/menu.sh" \
 [ "$me_ok" = 1 ] && ok "motor do menu não duplicado, com a guarda provada em arquivo forjado"
 
 # ---------------------------------------------------------------------------
+echo "20) Sequência CSI mais longa que 2 bytes não vaza tecla fantasma (OAV2-25)"
+# O alvo não é um terminal específico: Shift/Ctrl/Alt+seta chegam com MAIS de 2
+# bytes depois do ESC em toda plataforma que o Orchestra roda (macOS, Linux,
+# WSL), só que cada terminal escolhe uma codificação. menu_read_key só lia 2 e
+# deixava a sobra no buffer — o giro SEGUINTE do laço lia aquilo como tecla
+# SOLTA, e uma letra vinculada a atalho (o 'D' de qualquer Esquerda-com-
+# modificador, o 'A' de qualquer Cima-com-modificador) disparava sozinha: 'd'
+# apaga o agente sob o cursor sem confirmação, 'a' abre o prompt de adicionar.
+# tests/menu_ghost_pty.py cobre as duas famílias de codificação — CSI com
+# parâmetro ('\e[1;3D', comum em Linux/WSL) e ESC-prefixado ('\e\e[D', tmux/
+# screen/xterm/macOS) — mais Delete/PageUp/F5 (terminador '~'), o protocolo de
+# teclado do kitty (CSI 'u') e SS3 em modo aplicação. Os bytes vão direto pro
+# pty, então o teste roda igual em qualquer terminal, inclusive no CI ubuntu.
+# Dois casos a mais (space_in_csi, long_params) vieram da REVISÃO da OAV2-25:
+# um espaço dentro da CSI sem 'IFS=' virava variável vazia, e o teto de 16
+# bytes de parâmetro ficava raspando o produtor real mais longo (mouse SGR,
+# 15 bytes) — nenhuma tecla de teclado emite essas formas hoje, mas o modo de
+# falha é o mesmo, então ficam como regressão conhecida.
+gk_ok=1
+if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
+  gk_out="$(python3 "$ROOT/tests/menu_ghost_pty.py" "$ROOT" 2>/dev/null)"
+  case "$gk_out" in
+    *=FAIL*)
+      no "tecla-fantasma vazou no motor atual:"
+      printf '%s\n' "$gk_out" | grep '=FAIL' | while IFS= read -r linha; do
+        printf '       %s\n' "$linha" >&2
+      done
+      gk_ok=0 ;;
+  esac
+  [ -n "$gk_out" ] || { no "o teste-fantasma não devolveu nada — pty morreu cedo demais"; gk_ok=0; }
+
+  # Regra 4 de novo (caso 19): um teste que nunca falhou não é um teste. Provamos
+  # que ESTA matriz pega reproduzindo o roteiro inteiro contra uma cópia com o
+  # motor de ANTES da OAV2-25 ('read -rsn2', sem drenagem do resto da sequência)
+  # — tem de reprovar do mesmo jeito que reprovaria em produção. O caso SS3
+  # (ss3_up) É esperado passar nos DOIS motores: uma seta em modo aplicação
+  # tem exatamente 2 bytes depois do ESC, o mesmo tamanho fixo que o motor
+  # antigo já lia — não é um regressor, é cobertura. O padrão entra por
+  # marcador (@N@), pelo mesmo motivo do caso 19: para não disparar a própria
+  # guarda dele ao escanear ESTE arquivo.
+  GKOLD="$ORCHESTRA_STATE/menu_read_key.antigo.sh"
+  sed 's/@N@/n/g' >"$GKOLD" <<'FALSO_ANTIGO'
+menu_read_key() {
+  local __mrk_var="$1" __mrk_key __mrk_rest
+  IFS= read -rs@N@1 __mrk_key </dev/tty || return 1
+  case "$__mrk_key" in
+    $'\e')
+      _menu_esc_detect
+      __mrk_rest=""
+      read -rs@N@2 -t "$_MENU_ESC_WAIT" __mrk_rest </dev/tty
+      case "$__mrk_rest" in
+        '[A') __mrk_key=up ;;
+        '[B') __mrk_key=down ;;
+        '[C') __mrk_key=right ;;
+        '[D') __mrk_key=left ;;
+        '')   __mrk_key=esc ;;
+        *)    __mrk_key=unknown ;;
+      esac ;;
+    '')  __mrk_key=enter ;;
+    ' ') __mrk_key=space ;;
+  esac
+  printf -v "$__mrk_var" '%s' "$__mrk_key"
+}
+FALSO_ANTIGO
+  GKHOME="$ORCHESTRA_STATE/menu-antigo-home"
+  mkdir -p "$GKHOME"
+  cp -R "$ROOT/lib" "$GKHOME/lib"
+  python3 - "$GKHOME/lib/menu.sh" "$GKOLD" <<'PY'
+import sys
+target, oldfile = sys.argv[1], sys.argv[2]
+with open(target) as f:
+    lines = f.readlines()
+with open(oldfile) as f:
+    old = f.read()
+out, skip = [], False
+for line in lines:
+    if line.startswith('menu_read_key() {'):
+        skip = True
+        out.append(old)
+        continue
+    if skip:
+        if line.rstrip('\n') == '}':
+            skip = False
+        continue
+    out.append(line)
+with open(target, 'w') as f:
+    f.writelines(out)
+PY
+  gk_bad="$(python3 "$ROOT/tests/menu_ghost_pty.py" "$GKHOME" 2>/dev/null)"
+  bad_faltando=""
+  for esperado in shift_left ctrl_up alt_left_csi alt_up_csi alt_left_escpfx alt_up_escpfx \
+                  delete pageup f5 kitty_u space_in_csi long_params; do
+    case "$gk_bad" in
+      # '=FAIL' logo depois do NOME, não em qualquer lugar do blob inteiro —
+      # senão o FAIL de outro caso bastaria para dar falso positivo aqui.
+      *"$esperado=FAIL"*) ;;
+      *) bad_faltando="$bad_faltando $esperado" ;;
+    esac
+  done
+  [ -z "$bad_faltando" ] \
+    || { no "o teste-fantasma não pega: o motor de ANTES da OAV2-25 passou sem reprovar$bad_faltando"; gk_ok=0; }
+  rm -rf "$GKHOME" "$GKOLD"
+
+  [ "$gk_ok" = 1 ] && ok "matriz de teclas-fantasma (CSI c/ parâmetro, ESC-prefixado, '~', kitty CSI-u, SS3) drenada sem sobra"
+else
+  skipt "python3 ou /bin/bash ausente — tecla fantasma não exercitada"
+fi
+
+# ---------------------------------------------------------------------------
 printf '\nResultado: \033[1;32m%d passou\033[0m · \033[1;31m%d falhou\033[0m · \033[1;33m%d pulado\033[0m\n\n' \
   "$pass" "$fail" "$skip"
 [ "$fail" = 0 ] || exit 1
