@@ -43,9 +43,35 @@ de falha (byte sobra, vira comando) numa forma que nenhuma tecla emite hoje:
     chega a 15: quase raspando. Ficam como regressão conhecida — se
     voltarem, o CI tem de pegar.
 
-Fica em arquivo PRÓPRIO, e não em tests/menu_pty.py: esta task não altera
-aquele arquivo (a ampliação dele é a OAV2-26), e este roteiro também precisa
-inspecionar o team.json produzido, finalidade diferente do que ele cobre.
+Fica em arquivo PRÓPRIO, e não em tests/menu_pty.py: aquele arquivo cobre o
+MOTOR (setas, redesenho, Esc), e este roteiro também precisa inspecionar o
+team.json produzido, finalidade diferente do que ele cobre.
+
+OAV2-26 ampliou esta matriz com três itens medidos na revisão da OAV2-25:
+  - shift_up e ctrl_left entram em SESSION_CASES: a sobra que eles deixam no
+    motor ANTIGO é 'A'/'D' — os DOIS atalhos perigosos (abrir 'adicionar',
+    apagar sem confirmação) que shift_left/ctrl_up já provavam por outro
+    lado (esquerda/cima); cima/esquerda cobrem os quatro sentidos.
+  - DEAD_KEY_BATCH cobre Delete/Home/End/PageUp/F1/Shift+Baixo-Direita/
+    Ctrl+Baixo-Direita/setas em modo aplicação — por inspeção, NENHUMA delas
+    deixa sobra vinculada a atalho, nem no motor antigo, então region num
+    ÚNICO processo (em vez de um por tecla) sem perder cobertura.
+  - PROBE_K1_CASES ganha 'alt_space': Alt+Espaço ('\e ') é a única forma que
+    bate exatamente em lib/menu.sh:129/:146, as duas linhas que a matriz
+    antiga (13 casos) não cobria — removido o 'IFS=' delas, os 13 seguiam
+    13/13 verde (medido). O veredito aqui é a 1ª leitura (K1), não a 2ª: o
+    defeito é a sequência virar 'esc' (cancela a sessão) e não um byte
+    sobrando para a tecla seguinte.
+  - drain_until troca espera por SILÊNCIO por espera por MARCADOR em três
+    pontos (1º render, cancelamento do prompt 'adicionar', TEAM_FILE= no
+    fim) — mesmo motivo do 'quiet=1.5' que ela substitui: atravessar o
+    'sleep 1' de _st_add sem depender de um limiar de tempo calibrado à mão.
+    O envio da sequência SUSPEITA continua por silêncio (função 'enviar',
+    inalterada nesse ponto): drenar por marcador ali pararia no PRIMEIRO
+    redesenho, que no motor antigo acontece VÁRIAS vezes ANTES do atalho
+    vazar (cada byte sobrando é uma iteração de laço com seu próprio
+    _st_render) — trocar a técnica ali faria o teste parar de pegar,
+    exatamente o oposto do que a Regra 4 pede.
 
 ISOLAMENTO: cada caso sobe seu PRÓPRIO ORCHESTRA_STATE (tempdir, apagado no
 fim) — nunca o do processo que chama este script. Rodado standalone, sem
@@ -98,6 +124,38 @@ def drain(fd, seconds=1.2, quiet=0.3):
     return buf
 
 
+# aparece toda vez que _st_render desenha a tela do menu — inclusive no 1º
+# desenho da subida e no redesenho que segue o 'sleep 1' de _st_add cancelado.
+RENDER_MARK = "q sai sem abrir".encode("utf-8")
+# aparece quando _st_add abre de verdade (o prompt de nome do agente).
+PROMPT_MARK = "nome do agente".encode("utf-8")
+
+
+def drain_until(fd, markers, deadline=8.0):
+    """Lê do pty até QUALQUER byte de 'markers' aparecer no acumulado, ou
+    estourar o prazo — substitui esperar por SILÊNCIO nos três pontos que
+    não dependem de observar MÚLTIPLOS redesenhos em sequência (1º render,
+    cancelamento do prompt 'adicionar', TEAM_FILE= no fim). Ver o porquê de
+    NÃO usar isto no envio da sequência suspeita no comentário do módulo.
+    Devolve (bytes lidos, marcador achado ou None)."""
+    buf, end = b"", time.time() + deadline
+    while time.time() < end:
+        ready, _, _ = select.select([fd], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        for m in markers:
+            if m in buf:
+                return buf, m
+    return buf, None
+
+
 def _spawn(script):
     """Sobe um bash num pty novo rodando 'script'. Devolve (pid, fd)."""
     pid, fd = pty.fork()
@@ -135,6 +193,32 @@ SESSION_CASES = [
     ("alt_up_csi",      b"\x1b[1;3A",  "add"),      # Alt+Cima, CSI c/ parâmetro (Linux/WSL)
     ("alt_left_escpfx", b"\x1b\x1b[D", "delete"),  # Alt+Esquerda, ESC-prefixado (tmux/screen/xterm/macOS)
     ("alt_up_escpfx",   b"\x1b\x1b[A", "add"),      # Alt+Cima, ESC-prefixado (tmux/screen/xterm/macOS)
+    # OAV2-26: os dois sentidos que faltavam (a família CSI já cobre
+    # esquerda/cima acima) — Shift+Cima sobra 'A' (abre 'adicionar'),
+    # Ctrl+Esquerda sobra 'D' (apaga sem confirmação).
+    ("shift_up",        b"\x1b[1;2A",  "add"),
+    ("ctrl_left",       b"\x1b[1;5D",  "delete"),
+]
+
+# OAV2-26: teclas que a task pede cobrir mas que, por inspeção, NUNCA deixam
+# sobra vinculada a atalho — nem no motor ANTIGO (conferido caso a caso: a
+# sobra de cada uma cai em ';', dígitos, '~', 'B' ou 'C', nenhuma bate com
+# a/d/k/j/h/l/q). Testadas juntas em run_dead_key_batch, um processo só, em
+# vez de um por tecla — ver o comentário daquela função para o porquê.
+DEAD_KEY_BATCH = [
+    ("home",        b"\x1b[H"),
+    ("end",         b"\x1b[F"),
+    ("f1",          b"\x1bOP"),
+    ("pageup",      b"\x1b[5~"),
+    ("delete",      b"\x1b[3~"),
+    ("shift_down",  b"\x1b[1;2B"),
+    ("shift_right", b"\x1b[1;2C"),
+    ("ctrl_down",   b"\x1b[1;5B"),
+    ("ctrl_right",  b"\x1b[1;5C"),
+    ("ss3_up",      b"\x1bOA"),   # seta em modo aplicação (DECCKM)
+    ("ss3_down",    b"\x1bOB"),
+    ("ss3_left",    b"\x1bOD"),
+    ("ss3_right",   b"\x1bOC"),
 ]
 
 
@@ -167,7 +251,9 @@ def run_session_case(home, seq, kind):
             'echo "TEAM_FILE=$(team_file)"',
         ])
         pid, fd = _spawn(script)
-        saida = drain(fd, 2.0)
+        # OAV2-26: marcador em vez de silêncio no 1º render — ele aparece assim
+        # que _st_render desenha pela primeira vez, sem esperar os 2s fixos.
+        saida, _ = drain_until(fd, [RENDER_MARK], deadline=8.0)
 
         def enviar(bts, wait=1.2, quiet=0.3):
             nonlocal saida
@@ -176,6 +262,10 @@ def run_session_case(home, seq, kind):
 
         try:
             enviar(b"\x1b[B")  # líder -> coder: é sob este agente que a sequência mira
+            # Aqui o envio continua por SILÊNCIO, de propósito (ver o comentário
+            # do módulo): no motor antigo o atalho pode vazar várias iterações
+            # de laço depois do 1º redesenho, e parar no primeiro marcador
+            # perderia justamente esse vazamento.
             enviar(seq)
         except OSError:
             return "FAIL:menu_morreu"
@@ -184,17 +274,21 @@ def run_session_case(home, seq, kind):
         try:
             if abriu:
                 # _st_add trata '' como cancelar, imprime 'cancelado' e só ENTÃO
-                # dorme 1s antes de devolver o controle ao laço principal. Esse
-                # 1s é um buraco de silêncio NO MEIO do output — se 'quiet' for
-                # menor que ele, drain() acha que a sessão "se aquietou" e volta
-                # cedo demais, e o 'q' seguinte é escrito enquanto o script
-                # ainda está no sleep (terminal em modo canônico, sem ninguém
-                # lendo): o byte fica preso no buffer de linha do driver de tty
-                # e nunca chega como tecla. 'quiet' > 1s atravessa o buraco.
-                enviar(b"\n", wait=3.0, quiet=1.5)
-            enviar(b"q")
+                # dorme 1s antes de devolver o controle ao laço principal. A
+                # linha de ajuda 'q sai sem abrir' só reaparece quando
+                # _st_render roda DEPOIS desse sono — esperar por ELA em vez de
+                # por silêncio atravessa o buraco sem depender de um limiar de
+                # tempo calibrado à mão (era 'quiet=1.5', ~1,5s a mais por caso
+                # 'add'; achado da OAV2-26, medido).
+                os.write(fd, b"\n")
+                pedaco, _ = drain_until(fd, [RENDER_MARK], deadline=10.0)
+                saida += pedaco
+            os.write(fd, b"q")
         except OSError:
             pass
+        # marcador de novo, não silêncio, para o fim do processo.
+        pedaco, _ = drain_until(fd, [b"TEAM_FILE="], deadline=8.0)
+        saida += pedaco
 
         team_file = ""
         for linha in saida.decode("utf-8", "replace").splitlines():
@@ -218,6 +312,88 @@ def run_session_case(home, seq, kind):
             return "FAIL:add_opened_sem_pedido"
         if atual != EXPECTED_AGENTS:
             return "FAIL:time_alterado:%s" % ",".join(atual)
+        return "OK"
+    finally:
+        if fd is not None:
+            _close(pid, fd)
+        shutil.rmtree(proj, ignore_errors=True)
+        shutil.rmtree(state, ignore_errors=True)
+
+
+def run_dead_key_batch(home):
+    """Um ÚNICO select_team dirigido pela sequência INTEIRA de DEAD_KEY_BATCH.
+
+    Diferente de run_session_case, aqui NENHUMA sequência tem uma sobra
+    vinculada a atalho (conferido caso a caso, ver o comentário da lista) —
+    nem no motor ANTIGO. Por isso não precisam de isolamento entre si: testar
+    as 13 num processo só, em vez de um por tecla, economiza ~13 subidas de
+    bash+pty sem perder cobertura. Cada sequência viaja JUNTO com uma seta
+    CONHECIDA (↓) num único write — um só 'drain' por par, não dois —, e
+    confirmamos na resposta que ela navegou (o menu não morreu nem abriu
+    prompt nenhum) antes de seguir para a próxima. Por serem inertes nos
+    dois motores, esta função não entra no controle negativo (não provaria
+    nada lá); a prova de regressão desta rodada é shift_up/ctrl_left, em
+    SESSION_CASES.
+    """
+    proj = tempfile.mkdtemp()
+    state = tempfile.mkdtemp()
+    pid = fd = None
+    problemas = []
+    try:
+        script = "\n".join([
+            'export ORCHESTRA_HOME="%s"' % home,
+            'export ORCHESTRA_STATE="%s"' % state,
+            'export ORCHESTRA_MUX=stub',
+            'export ORCHESTRA_PROJECT="%s"' % proj,
+            'cd "$ORCHESTRA_PROJECT"',
+            '. "$ORCHESTRA_HOME/lib/core.sh"',
+            'team_ensure >/dev/null 2>&1',
+            'select_team',
+            'echo "RC=$?"',
+            'echo "TEAM_FILE=$(team_file)"',
+        ])
+        pid, fd = _spawn(script)
+        saida, _ = drain_until(fd, [RENDER_MARK], deadline=8.0)
+
+        def enviar(bts, wait=1.2, quiet=0.3):
+            nonlocal saida
+            os.write(fd, bts)
+            saida += drain(fd, wait, quiet)
+
+        try:
+            enviar(b"\x1b[B")  # líder -> coder
+            for nome, seq in DEAD_KEY_BATCH:
+                antes = len(saida)
+                # a sequência suspeita e a seta de prova de vida viajam JUNTAS
+                # num único write/drain — metade das idas ao pty de mandar as
+                # duas em separado, sem perder o que cada uma prova.
+                enviar(seq + b"\x1b[B")
+                pedaco = saida[antes:]
+                if b"nome do agente" in pedaco:
+                    problemas.append("%s:abriu_add" % nome)
+                    enviar(b"\n")  # cancela o prompt e segue o roteiro
+                elif not pedaco:
+                    problemas.append("%s:menu_travou" % nome)
+            os.write(fd, b"q")
+        except OSError:
+            return "FAIL:menu_morreu"
+        pedaco, _ = drain_until(fd, [b"TEAM_FILE="], deadline=8.0)
+        saida += pedaco
+
+        team_file = ""
+        for linha in saida.decode("utf-8", "replace").splitlines():
+            if linha.startswith("TEAM_FILE="):
+                team_file = linha.split("=", 1)[1].strip()
+        if not team_file or not os.path.isfile(team_file):
+            return "FAIL:sem_team_file"
+        try:
+            atual = _team_agent_names(team_file)
+        except (ValueError, OSError):
+            return "FAIL:team_json_invalido"
+        if atual != EXPECTED_AGENTS:
+            problemas.append("time_alterado:%s" % ",".join(atual))
+        if problemas:
+            return "FAIL:" + ";".join(problemas)
         return "OK"
     finally:
         if fd is not None:
@@ -280,12 +456,78 @@ def run_probe_case(home, seq):
     return "OK" if k2 == "x" else "FAIL:K1=%s,K2=%s(esperado x)" % (k1, k2)
 
 
+# OAV2-26: achado da revisão da OAV2-25 que só ganhou teste agora — as duas
+# linhas sem cobertura eram lib/menu.sh:129 e :146 (medido: removendo o
+# 'IFS=' delas, os 13 casos acima seguem 13/13 verde).
+PROBE_K1_CASES = [
+    ("alt_space", b"\x1b "),   # ESC + espaço — Alt+Espaço em terminal com Meta
+]
+
+
+def run_probe_k1_case(home, seq):
+    """Como run_probe_case, mas o veredito está na 1ª leitura (K1), não na
+    2ª: o defeito aqui não é sobrar byte para a tecla seguinte, é a PRÓPRIA
+    sequência ser classificada errado. Alt+Espaço ('\\e ', ESC seguido de um
+    espaço) é um espaço (0x20) logo após o ESC: sem 'IFS=' no primeiro read
+    do ramo ESC (lib/menu.sh:129), o bash descarta o espaço nas bordas do
+    que leu — regra de field-splitting do 'read' sem 'IFS=' vazio — e a
+    variável fica VAZIA, o mesmo valor que 'Esc sozinho' produz. menu_read_key
+    devolve 'esc' em vez de 'unknown', e 'esc' cancela a sessão inteira: uma
+    combinação de tecla nunca deveria ter esse poder por acidente. Não
+    escrevemos um 'x' de prova depois — não há sobra para verificar aqui.
+    """
+    script = "\n".join([
+        'export ORCHESTRA_MUX=stub',
+        '. "%s/lib/menu.sh"' % home,
+        'menu_read_key K1',
+        'echo "K1=[$K1]"',
+    ])
+    pid, fd = _spawn(script)
+    time.sleep(0.15)  # bash sobe e chega no primeiro read antes de escrever
+    try:
+        os.write(fd, seq)
+    except OSError:
+        _close(pid, fd)
+        return "FAIL:menu_morreu"
+    saida = drain(fd, 2.5, quiet=0.4)
+    _close(pid, fd)
+    k1 = None
+    for linha in saida.decode("utf-8", "replace").splitlines():
+        if linha.startswith("K1="):
+            try:
+                k1 = linha.split("K1=[", 1)[1].split("]", 1)[0]
+            except IndexError:
+                pass
+    if k1 is None:
+        return "FAIL:sem_resposta"
+    return "OK" if k1 == "unknown" else "FAIL:K1=%s(esperado unknown)" % k1
+
+
 def main():
     home = sys.argv[1]
+    # segundo argv opcional: lista de nomes separados por vírgula. Usado pelo
+    # controle negativo do caso 20 (tests/smoke.sh) para rodar SÓ os casos que
+    # o motor de ANTES da OAV2-25 tem de reprovar — dead_key_batch (~13s: 13
+    # sequências, cada uma seguida de uma seta de prova de vida) e ss3_up NÃO
+    # entram nessa lista (são inertes nos dois motores, não provam regressão
+    # nenhuma ali), e rodá-los de novo contra a cópia antiga só gastaria tempo
+    # à toa — foi o que estourou a suíte para além de 1min30 (medido).
+    somente = set(sys.argv[2].split(",")) if len(sys.argv) > 2 and sys.argv[2] else None
+
+    def quer(nome):
+        return somente is None or nome in somente
+
     for name, seq, kind in SESSION_CASES:
-        print("CASE:%s=%s" % (name, run_session_case(home, seq, kind)))
+        if quer(name):
+            print("CASE:%s=%s" % (name, run_session_case(home, seq, kind)))
+    if quer("dead_key_batch"):
+        print("CASE:dead_key_batch=%s" % run_dead_key_batch(home))
     for name, seq in PROBE_CASES:
-        print("PROBE:%s=%s" % (name, run_probe_case(home, seq)))
+        if quer(name):
+            print("PROBE:%s=%s" % (name, run_probe_case(home, seq)))
+    for name, seq in PROBE_K1_CASES:
+        if quer(name):
+            print("PROBE:%s=%s" % (name, run_probe_k1_case(home, seq)))
     print("SESSAO_VIVA")
 
 

@@ -472,6 +472,37 @@ if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
     *CHEGOU_NO_ADICIONAR*) ;;
     *) no "a seta ↓ não chega em '+ adicionar agente'"; m_ok=0 ;;
   esac
+  # cada seta prova um EFEITO na tela, não só "saiu algum byte" (achado da
+  # revisão da OAV2-26: com 'up)'/'left|right)' virando no-op em lib/core.sh,
+  # a versão anterior deste caso continuava passando).
+  case "$menu_out" in
+    *DESCE_PARA_CODER*) ;;
+    *) no "a seta ↓ não move o cursor do líder para o coder"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *DESCE_PARA_REVIEWER*) ;;
+    *) no "a seta ↓ não move o cursor do coder para o reviewer"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *SOBE_PARA_CODER*) ;;
+    *) no "a seta ↑ não move o cursor de volta para o coder"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *DIREITA_TROCA_PARA_CODEX*) ;;
+    *) no "a seta → não troca a IA da linha corrente (opencode -> codex)"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *ESQUERDA_TROCA_PARA_CLAUDE*) ;;
+    *) no "a seta ← não troca a IA da linha corrente (codex -> claude)"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *QUATRO_SETAS_VIVAS*) ;;
+    *) no "↑/↓/←/→ não navegam de verdade (o menu morreu no meio da sequência)"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *ESC_CANCELA*) ;;
+    *) no "Esc sozinho não cancelou com rc 2"; m_ok=0 ;;
+  esac
   [ "$m_ok" = 1 ] && ok "setas navegam até o fim do menu e o redesenho não deixa sobra"
 else
   skipt "python3 ou /bin/bash ausente — menu de composição não exercitado"
@@ -763,12 +794,18 @@ if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
   # Regra 4 de novo (caso 19): um teste que nunca falhou não é um teste. Provamos
   # que ESTA matriz pega reproduzindo o roteiro inteiro contra uma cópia com o
   # motor de ANTES da OAV2-25 ('read -rsn2', sem drenagem do resto da sequência)
-  # — tem de reprovar do mesmo jeito que reprovaria em produção. O caso SS3
-  # (ss3_up) É esperado passar nos DOIS motores: uma seta em modo aplicação
-  # tem exatamente 2 bytes depois do ESC, o mesmo tamanho fixo que o motor
-  # antigo já lia — não é um regressor, é cobertura. O padrão entra por
-  # marcador (@N@), pelo mesmo motivo do caso 19: para não disparar a própria
-  # guarda dele ao escanear ESTE arquivo.
+  # — tem de reprovar do mesmo jeito que reprovaria em produção. shift_up e
+  # ctrl_left (OAV2-26) entram nesta lista pelo mesmo motivo de shift_left/
+  # ctrl_up: a sobra é 'A'/'D' de verdade. alt_space (OAV2-26) também entra —
+  # ele já reprova sozinho SEM precisar deste motor inteiro (basta tirar o
+  # 'IFS=' de lib/menu.sh:129/:146; medido), mas reprovar aqui também confirma
+  # que o motor de ANTES da OAV2-25 tinha o mesmo defeito. dead_key_batch NÃO
+  # entra: por inspeção, nenhuma das 13 sequências ali deixa sobra vinculada a
+  # atalho, nem no motor antigo — não é regressor, é cobertura. O caso SS3
+  # (ss3_up) do PROBE_CASES é a mesma história: uma seta em modo aplicação tem
+  # exatamente 2 bytes depois do ESC, o mesmo tamanho fixo que o motor antigo
+  # já lia. O padrão entra por marcador (@N@), pelo mesmo motivo do caso 19:
+  # para não disparar a própria guarda dele ao escanear ESTE arquivo.
   GKOLD="$ORCHESTRA_STATE/menu_read_key.antigo.sh"
   sed 's/@N@/n/g' >"$GKOLD" <<'FALSO_ANTIGO'
 menu_read_key() {
@@ -817,10 +854,16 @@ for line in lines:
 with open(target, 'w') as f:
     f.writelines(out)
 PY
-  gk_bad="$(python3 "$ROOT/tests/menu_ghost_pty.py" "$GKHOME" 2>/dev/null)"
+  # só os nomes que TÊM de reprovar no motor antigo — dead_key_batch e ss3_up
+  # ficam de fora (ver o comentário de 'somente' em menu_ghost_pty.py:main):
+  # rodá-los de novo contra a cópia antiga não prova nada e só gasta tempo.
+  GK_ESPERADOS="shift_left ctrl_up alt_left_csi alt_up_csi alt_left_escpfx alt_up_escpfx
+                shift_up ctrl_left
+                delete pageup f5 kitty_u space_in_csi long_params alt_space"
+  gk_bad="$(python3 "$ROOT/tests/menu_ghost_pty.py" "$GKHOME" \
+    "$(printf '%s' "$GK_ESPERADOS" | tr -s ' \n' ',')" 2>/dev/null)"
   bad_faltando=""
-  for esperado in shift_left ctrl_up alt_left_csi alt_up_csi alt_left_escpfx alt_up_escpfx \
-                  delete pageup f5 kitty_u space_in_csi long_params; do
+  for esperado in $GK_ESPERADOS; do
     case "$gk_bad" in
       # '=FAIL' logo depois do NOME, não em qualquer lugar do blob inteiro —
       # senão o FAIL de outro caso bastaria para dar falso positivo aqui.
@@ -832,9 +875,34 @@ PY
     || { no "o teste-fantasma não pega: o motor de ANTES da OAV2-25 passou sem reprovar$bad_faltando"; gk_ok=0; }
   rm -rf "$GKHOME" "$GKOLD"
 
-  [ "$gk_ok" = 1 ] && ok "matriz de teclas-fantasma (CSI c/ parâmetro, ESC-prefixado, '~', kitty CSI-u, SS3) drenada sem sobra"
+  [ "$gk_ok" = 1 ] && ok "matriz de teclas-fantasma (CSI c/ parâmetro, ESC-prefixado, '~', kitty CSI-u, SS3, Alt+Espaço) drenada sem sobra"
 else
   skipt "python3 ou /bin/bash ausente — tecla fantasma não exercitada"
+fi
+
+# ---------------------------------------------------------------------------
+echo "21) Menu de composição: adicionar, remover, trocar IA e persistir (OAV2-26)"
+# O ponto cego que tests/menu_pty.py (caso 15) sempre deixou: nunca apertava 'a'
+# (adicionar, grava no team.json na hora), 'd' (remover, idem), Espaço (troca de
+# IA) nem Enter numa linha de agente — só a seta ↓ até '+ adicionar agente' e
+# 'q'. tests/menu_compose_pty.py dirige esses quatro fluxos por pty de verdade e
+# confere o EFEITO no team.json (e no prompt gerado, no caso do 'a'), não a tela.
+cp_ok=1
+if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
+  cp_out="$(python3 "$ROOT/tests/menu_compose_pty.py" "$ROOT" 2>/dev/null)"
+  case "$cp_out" in
+    *=FAIL*)
+      no "fluxo de composição falhou:"
+      printf '%s\n' "$cp_out" | grep '=FAIL' | while IFS= read -r linha; do
+        printf '       %s\n' "$linha" >&2
+      done
+      cp_ok=0 ;;
+  esac
+  [ -n "$cp_out" ] || { no "o teste de composição não devolveu nada — pty morreu cedo demais"; cp_ok=0; }
+  case "$cp_out" in *SESSAO_VIVA*) ;; *) no "o teste de composição não chegou ao fim"; cp_ok=0 ;; esac
+  [ "$cp_ok" = 1 ] && ok "'a' até o fim (com prompt gerado), 'a' cancelado, 'd' sem confirmação, Espaço e Enter persistindo certo"
+else
+  skipt "python3 ou /bin/bash ausente — menu de composição (add/del/espaço/enter) não exercitado"
 fi
 
 # ---------------------------------------------------------------------------
