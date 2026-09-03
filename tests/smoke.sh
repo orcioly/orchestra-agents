@@ -432,13 +432,13 @@ probe="$(
   PATH="$ZJFAKE:$PATH"; export PATH
   ORCHESTRA_MUX=zellij; export ORCHESTRA_MUX
   source "$ROOT/lib/mux.sh" 2>/dev/null
-  _zj_session_name_fits "orchestra-nome-longo-demais-1234" && echo "LONGO_CABE"
-  _zj_session_name_fits "orchestra-curto-1234" || echo "CURTO_NAO_CABE"
+  _zj_session_name_fits "orchestra-nome-longo-demais-1234" && echo "TOO_LONG_FITS"
+  _zj_session_name_fits "orchestra-curto-1234" || echo "SHORT_DOES_NOT_FIT"
   mux_session_name /a/b/tsoft-rep-hub
 )"
 case "$probe" in
-  *LONGO_CABE*)     no "sob pipefail a sondagem aceita nome longo demais (o 'up' quebra no macOS)"; n_ok=0 ;;
-  *CURTO_NAO_CABE*) no "sob pipefail a sondagem recusa um nome que cabe"; n_ok=0 ;;
+  *TOO_LONG_FITS*)      no "sob pipefail a sondagem aceita nome longo demais (o 'up' quebra no macOS)"; n_ok=0 ;;
+  *SHORT_DOES_NOT_FIT*) no "sob pipefail a sondagem recusa um nome que cabe"; n_ok=0 ;;
 esac
 chosen="$(printf '%s\n' "$probe" | tail -1)"
 [ -n "$chosen" ] && [ "${#chosen}" -le 24 ] \
@@ -456,21 +456,52 @@ if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
   menu_out="$(python3 "$ROOT/tests/menu_pty.py" "$ROOT" "$MENUPROJ" 2>/dev/null)"
   rm -rf "$MENUPROJ"
   case "$menu_out" in
-    *MENU_MORREU*)      no "a seta ↓ fecha o menu (timeout fracionário em 'read -t')"; m_ok=0 ;;
+    *MENU_DIED*)         no "a seta ↓ fecha o menu (timeout fracionário em 'read -t')"; m_ok=0 ;;
   esac
   case "$menu_out" in
-    *TIMEOUT_INVALIDO*) no "'read -t' recusou o timeout — a detecção de fração não pegou"; m_ok=0 ;;
+    *INVALID_TIMEOUT*)  no "'read -t' recusou o timeout — a detecção de fração não pegou"; m_ok=0 ;;
   esac
   case "$menu_out" in
-    *ANCORA_ABSOLUTA*)  no "o menu voltou a usar \033[u — com scroll ele se duplica na tela"; m_ok=0 ;;
+    *ABSOLUTE_ANCHOR*)  no "o menu voltou a usar âncora absoluta de cursor — com scroll ele se duplica na tela"; m_ok=0 ;;
   esac
   case "$menu_out" in
-    *REDESENHO_RELATIVO*) ;;
-    *) no "o redesenho não é relativo (\033[<n>A ausente)"; m_ok=0 ;;
+    *RELATIVE_REDRAW*) ;;
+    *) no "o redesenho não é relativo: falta o movimento de subir N linhas"; m_ok=0 ;;
   esac
   case "$menu_out" in
-    *CHEGOU_NO_ADICIONAR*) ;;
+    *REACHED_ADD*) ;;
     *) no "a seta ↓ não chega em '+ adicionar agente'"; m_ok=0 ;;
+  esac
+  # cada seta prova um EFEITO na tela, não só "saiu algum byte" (achado da
+  # revisão da OAV2-26: com 'up)'/'left|right)' virando no-op em lib/core.sh,
+  # a versão anterior deste caso continuava passando).
+  case "$menu_out" in
+    *MOVES_DOWN_TO_CODER*) ;;
+    *) no "a seta ↓ não move o cursor do líder para o coder"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *MOVES_DOWN_TO_REVIEWER*) ;;
+    *) no "a seta ↓ não move o cursor do coder para o reviewer"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *MOVES_UP_TO_CODER*) ;;
+    *) no "a seta ↑ não move o cursor de volta para o coder"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *RIGHT_SWITCHES_TO_CODEX*) ;;
+    *) no "a seta → não troca a IA da linha corrente (opencode -> codex)"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *LEFT_SWITCHES_TO_CLAUDE*) ;;
+    *) no "a seta ← não troca a IA da linha corrente (codex -> claude)"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *FOUR_ARROWS_ALIVE*) ;;
+    *) no "↑/↓/←/→ não navegam de verdade (o menu morreu no meio da sequência)"; m_ok=0 ;;
+  esac
+  case "$menu_out" in
+    *ESC_CANCELS*) ;;
+    *) no "Esc sozinho não cancelou com rc 2"; m_ok=0 ;;
   esac
   [ "$m_ok" = 1 ] && ok "setas navegam até o fim do menu e o redesenho não deixa sobra"
 else
@@ -481,8 +512,8 @@ fi
 echo "16) Nada é escrito na raiz do projeto"
 r_ok=1
 # o projeto do usuário não recebe UM arquivo sequer do Orchestra
-sujeira="$(ls -A "$ORCHESTRA_PROJECT" 2>/dev/null)"
-[ -z "$sujeira" ] || { no "o Orchestra deixou arquivos na raiz do projeto: $sujeira"; r_ok=0; }
+leftovers="$(ls -A "$ORCHESTRA_PROJECT" 2>/dev/null)"
+[ -z "$leftovers" ] || { no "o Orchestra deixou arquivos na raiz do projeto: $leftovers"; r_ok=0; }
 case "$ODIR" in
   "$ORCHESTRA_STATE"/projects/*) ;;
   *) no "ORCHESTRA_DIR devia ficar em \$ORCHESTRA_STATE/projects/<slug>, veio '$ODIR'"; r_ok=0 ;;
@@ -576,6 +607,304 @@ done
 grep -q 'os_detect' "$ROOT/install.sh" || { no "install.sh não detecta o sistema operacional"; u_ok=0; }
 rm -rf "$UNHOME" "$UNHOME2"
 [ "$u_ok" = 1 ] && ok "cada item sai pelo método com que entrou; o que era do usuário fica"
+
+# ---------------------------------------------------------------------------
+echo "19) O motor do menu vive num arquivo só"
+me_ok=1
+
+# Lint de arquitetura, não de estilo. O motor do menu — esconder o cursor, apagar o
+# desenho anterior, ler uma tecla — carrega dois bugs que NÃO aparecem em bash 5 nem
+# fora de um pty: o bash 3.2 do macOS recusa 'read -t 0.05' (era isso que fazia toda
+# seta fechar o menu, e o zellij nem abria) e a âncora absoluta reimprime o menu
+# quando o terminal rola. Quem duplicar o motor não vai ver o bug voltar na própria
+# máquina — por isso a regra é teste que reprova o build, e não documentação.
+#
+# Os regex abaixo são escritos para NÃO casarem consigo mesmos ('read -rs[nt]' não
+# contém 'read -rsn'), e é isso que permite varrer o repositório INTEIRO, este arquivo
+# de teste incluído, sem abrir a exceção conveniente de "testes não contam".
+MENU_OWNER="lib/menu.sh"
+
+# Isenção TEMPORÁRIA, com prazo mecânico: existiu enquanto select_team() hospedava
+# o motor antigo em lib/core.sh (OAV2-2 migrou para lib/menu.sh). Vazia agora que o
+# arquivo isento não tem mais nenhum padrão do motor — é o prazo vencendo por conta
+# própria, em vez de um "remover depois" que ninguém lê.
+MENU_EXEMPT=""
+
+_menu_engine_patterns() { # regex TAB o-que-é TAB onde-pode TAB o-que-usar TAB por-que-dói
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    'read -rs[nt]' \
+    'leitura de tecla crua' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_read_key' \
+    'o bash 3.2 do macOS recusa timeout fracionário e devolve a variável VAZIA, que é exatamente como se reconhece "Esc sozinho": toda seta fecha o menu'
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    '\\033\[\?25[lh]' \
+    'esconder ou mostrar o cursor' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_begin e menu_end' \
+    'quem esconde o cursor tem de garantir a devolução dele em INT/TERM/EXIT, e essa proteção mora no motor'
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    '\\033\[(%d|[0-9]+|\$\{?[A-Za-z_][A-Za-z_0-9]*\}?)A' \
+    'redesenho relativo' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_draw_begin e menu_draw_end' \
+    'um segundo contador de linhas sai de sincronia com o primeiro e o menu volta a se reimprimir'
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    '[Dd][Rr][Aa][Ww][Nn]=' \
+    'contador de linhas do desenho' \
+    "só pode existir em $MENU_OWNER" \
+    'menu_draw_end' \
+    'o estado do desenho é do motor; conteúdo que conta linhas por fora duplica o menu quando erra a conta'
+}
+
+_menu_engine_hits() { # $1 arquivo  $2 'motor+ancora'|'so-ancora' — ecoa linha TAB … por violação
+  local f="$1" scope="$2" rx what where use why matches n
+  {
+    # Regra 2: a âncora absoluta não tem uso legítimo em lugar NENHUM, nem no dono do
+    # motor. Por isso ela é checada à parte, em todos os arquivos e sem isenção.
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      '\\033\[[su]([^A-Za-z0-9_]|$)' \
+      'âncora absoluta de cursor' \
+      "não pode existir em arquivo nenhum, nem em $MENU_OWNER" \
+      'menu_draw_begin, que sobe N linhas a partir de onde o cursor está' \
+      'a âncora guarda a LINHA ABSOLUTA da tela: quando o menu não cabe na janela o terminal rola, ela passa a apontar para o meio do bloco e o menu aparece duas vezes'
+    [ "$scope" = 'motor+ancora' ] && _menu_engine_patterns
+  } | while IFS="$(printf '\t')" read -r rx what where use why; do
+    [ -n "$rx" ] || continue
+    # Regra 3: comentário não é código. lib/core.sh DOCUMENTA esta armadilha e cita a
+    # âncora no texto — sem o filtro, a guarda reprovaria justamente a documentação
+    # que existe para evitar o erro.
+    matches="$(grep -nE "$rx" "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#')"
+    [ -n "$matches" ] || continue
+    printf '%s\n' "$matches" | while IFS=: read -r n _; do
+      printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$what" "$where" "$use" "$why"
+    done
+  done
+}
+
+_menu_engine_report() { # $1 caminho relativo  $2 saída de _menu_engine_hits
+  # A mensagem tem de ENSINAR: quem esbarrar nela pode não conhecer a história.
+  printf '%s\n' "$2" | while IFS="$(printf '\t')" read -r n what where use why; do
+    [ -n "$n" ] || continue
+    printf '  \033[1;31m✖\033[0m %s em %s:%s\n' "$what" "$1" "$n"
+    printf '     %s.\n' "$where"
+    printf '     %s.\n' "$why"
+    printf '     Use %s.\n' "$use"
+  done
+}
+
+menu_scan_files=("$ROOT/bin/orchestra" "$ROOT"/lib/*.sh "$ROOT"/agents/*.sh \
+                 "$ROOT"/scripts/*.sh "$ROOT/install.sh" "$ROOT/uninstall.sh" \
+                 "$ROOT/tests/smoke.sh")
+for f in "${menu_scan_files[@]}"; do
+  [ -f "$f" ] || continue
+  rel="${f#"$ROOT"/}"
+  scope='motor+ancora'
+  case "$rel" in "$MENU_OWNER"|"$MENU_EXEMPT") scope='so-ancora' ;; esac
+  hits="$(_menu_engine_hits "$f" "$scope")"
+  [ -n "$hits" ] || continue
+  no "regra do motor de menu violada em $rel"
+  _menu_engine_report "$rel" "$hits"
+  me_ok=0
+done
+
+# O prazo da isenção, cobrado por máquina.
+if [ -n "$MENU_EXEMPT" ] && [ -z "$(_menu_engine_hits "$ROOT/$MENU_EXEMPT" 'motor+ancora')" ]; then
+  no "a isenção de $MENU_EXEMPT venceu: o motor antigo já saiu de lá — apague MENU_EXEMPT para a Regra 1 passar a valer nele também"
+  me_ok=0
+fi
+
+# Regra 4 — um teste que nunca falhou não é um teste. Sem este caso, um erro no grep
+# deixaria a guarda passando para sempre sem verificar nada. Fabricamos o caso real,
+# um menu novo escrito do zero em OUTRO arquivo, e exigimos que seja reprovado. Os
+# padrões entram por marcadores (@L@, @A@…) trocados na hora, justamente para que
+# ESTAS linhas aqui não disparem a guarda que elas testam.
+MENUBAD="$ORCHESTRA_STATE/duplicated-menu.sh"
+sed 's/@L@/l/; s/@A@/A/; s/@W@/w/; s/@N@/n/; s/@S@/s/' >"$MENUBAD" <<'FAKE'
+#!/usr/bin/env bash
+my_new_menu() {
+  printf '\033[?25@L@' >/dev/tty
+  printf '\033[3@A@\r\033[J' >/dev/tty
+  dra@W@n=0
+  read -rs@N@1 key </dev/tty
+  printf '\033[@S@' >/dev/tty
+}
+FAKE
+menu_bad="$(_menu_engine_hits "$MENUBAD" 'motor+ancora')"
+for expected in 'leitura de tecla crua' 'esconder ou mostrar o cursor' 'redesenho relativo' \
+                'contador de linhas do desenho' 'âncora absoluta de cursor'; do
+  case "$menu_bad" in
+    *"$expected"*) ;;
+    *) no "a guarda deixou passar um menu duplicado: não reprovou '$expected'"; me_ok=0 ;;
+  esac
+done
+
+# E o oposto, também por máquina: os MESMOS padrões, comentados, não podem reprovar.
+# É isso que mantém a documentação da armadilha viva dentro do código.
+sed 's/^/# /' "$MENUBAD" >"$MENUBAD.commented"
+[ -z "$(_menu_engine_hits "$MENUBAD.commented" 'motor+ancora')" ] \
+  || { no "a guarda reprovou linhas de comentário: a documentação da armadilha não pode derrubar o build"; me_ok=0; }
+rm -f "$MENUBAD" "$MENUBAD.commented"
+
+# A guarda impede; a documentação orienta. Quem esbarra no teste vai procurar o porquê.
+grep -q 'menu_read_key' "$ROOT/CONTRIBUTING.md" \
+  || { no "CONTRIBUTING.md não registra que o motor do menu mora em $MENU_OWNER"; me_ok=0; }
+# CLAUDE.md não é versionado (está no .gitignore), então no CI ele nem existe:
+# exigi-lo lá reprovaria o build por um arquivo ausente. Cobra-se onde ele existe.
+if [ -f "$ROOT/CLAUDE.md" ] && ! grep -q 'menu_read_key' "$ROOT/CLAUDE.md"; then
+  no "CLAUDE.md não registra a armadilha do motor de menu duplicado"; me_ok=0
+fi
+grep -q 'POR QUE ESTE ARQUIVO EXISTE' "$ROOT/lib/menu.sh" \
+  || { no "lib/menu.sh perdeu o comentário que explica por que ele é único"; me_ok=0; }
+
+[ "$me_ok" = 1 ] && ok "motor do menu não duplicado, com a guarda provada em arquivo forjado"
+
+# ---------------------------------------------------------------------------
+echo "20) Sequência CSI mais longa que 2 bytes não vaza tecla fantasma (OAV2-25)"
+# O alvo não é um terminal específico: Shift/Ctrl/Alt+seta chegam com MAIS de 2
+# bytes depois do ESC em toda plataforma que o Orchestra roda (macOS, Linux,
+# WSL), só que cada terminal escolhe uma codificação. menu_read_key só lia 2 e
+# deixava a sobra no buffer — o giro SEGUINTE do laço lia aquilo como tecla
+# SOLTA, e uma letra vinculada a atalho (o 'D' de qualquer Esquerda-com-
+# modificador, o 'A' de qualquer Cima-com-modificador) disparava sozinha: 'd'
+# cai no ramo de apagar o agente sob o cursor — hoje para na confirmação da
+# OAV2-27 (antes dela, apagava direto) —, 'a' abre o prompt de adicionar.
+# tests/menu_ghost_pty.py cobre as duas famílias de codificação — CSI com
+# parâmetro ('\e[1;3D', comum em Linux/WSL) e ESC-prefixado ('\e\e[D', tmux/
+# screen/xterm/macOS) — mais Delete/PageUp/F5 (terminador '~'), o protocolo de
+# teclado do kitty (CSI 'u') e SS3 em modo aplicação. Os bytes vão direto pro
+# pty, então o teste roda igual em qualquer terminal, inclusive no CI ubuntu.
+# Dois casos a mais (space_in_csi, long_params) vieram da REVISÃO da OAV2-25:
+# um espaço dentro da CSI sem 'IFS=' virava variável vazia, e o teto de 16
+# bytes de parâmetro ficava raspando o produtor real mais longo (mouse SGR,
+# 15 bytes) — nenhuma tecla de teclado emite essas formas hoje, mas o modo de
+# falha é o mesmo, então ficam como regressão conhecida.
+gk_ok=1
+if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
+  gk_out="$(python3 "$ROOT/tests/menu_ghost_pty.py" "$ROOT" 2>/dev/null)"
+  case "$gk_out" in
+    *=FAIL*)
+      no "tecla-fantasma vazou no motor atual:"
+      printf '%s\n' "$gk_out" | grep '=FAIL' | while IFS= read -r line; do
+        printf '       %s\n' "$line" >&2
+      done
+      gk_ok=0 ;;
+  esac
+  [ -n "$gk_out" ] || { no "o teste-fantasma não devolveu nada — pty morreu cedo demais"; gk_ok=0; }
+
+  # Regra 4 de novo (caso 19): um teste que nunca falhou não é um teste. Provamos
+  # que ESTA matriz pega reproduzindo o roteiro inteiro contra uma cópia com o
+  # motor de ANTES da OAV2-25 ('read -rsn2', sem drenagem do resto da sequência)
+  # — tem de reprovar do mesmo jeito que reprovaria em produção. shift_up e
+  # ctrl_left (OAV2-26) entram nesta lista pelo mesmo motivo de shift_left/
+  # ctrl_up: a sobra é 'A'/'D' de verdade. alt_space (OAV2-26) também entra —
+  # ele já reprova sozinho SEM precisar deste motor inteiro (basta tirar o
+  # 'IFS=' de lib/menu.sh:129/:146; medido), mas reprovar aqui também confirma
+  # que o motor de ANTES da OAV2-25 tinha o mesmo defeito. dead_key_batch NÃO
+  # entra: por inspeção, nenhuma das 13 sequências ali deixa sobra vinculada a
+  # atalho, nem no motor antigo — não é regressor, é cobertura. O caso SS3
+  # (ss3_up) do PROBE_CASES é a mesma história: uma seta em modo aplicação tem
+  # exatamente 2 bytes depois do ESC, o mesmo tamanho fixo que o motor antigo
+  # já lia. O padrão entra por marcador (@N@), pelo mesmo motivo do caso 19:
+  # para não disparar a própria guarda dele ao escanear ESTE arquivo.
+  GKOLD="$ORCHESTRA_STATE/menu_read_key.old.sh"
+  sed 's/@N@/n/g' >"$GKOLD" <<'FAKE_OLD'
+menu_read_key() {
+  local __mrk_var="$1" __mrk_key __mrk_rest
+  IFS= read -rs@N@1 __mrk_key </dev/tty || return 1
+  case "$__mrk_key" in
+    $'\e')
+      _menu_esc_detect
+      __mrk_rest=""
+      read -rs@N@2 -t "$_MENU_ESC_WAIT" __mrk_rest </dev/tty
+      case "$__mrk_rest" in
+        '[A') __mrk_key=up ;;
+        '[B') __mrk_key=down ;;
+        '[C') __mrk_key=right ;;
+        '[D') __mrk_key=left ;;
+        '')   __mrk_key=esc ;;
+        *)    __mrk_key=unknown ;;
+      esac ;;
+    '')  __mrk_key=enter ;;
+    ' ') __mrk_key=space ;;
+  esac
+  printf -v "$__mrk_var" '%s' "$__mrk_key"
+}
+FAKE_OLD
+  GKHOME="$ORCHESTRA_STATE/old-menu-home"
+  mkdir -p "$GKHOME"
+  cp -R "$ROOT/lib" "$GKHOME/lib"
+  python3 - "$GKHOME/lib/menu.sh" "$GKOLD" <<'PY'
+import sys
+target, oldfile = sys.argv[1], sys.argv[2]
+with open(target) as f:
+    lines = f.readlines()
+with open(oldfile) as f:
+    old = f.read()
+out, skip = [], False
+for line in lines:
+    if line.startswith('menu_read_key() {'):
+        skip = True
+        out.append(old)
+        continue
+    if skip:
+        if line.rstrip('\n') == '}':
+            skip = False
+        continue
+    out.append(line)
+with open(target, 'w') as f:
+    f.writelines(out)
+PY
+  # só os nomes que TÊM de reprovar no motor antigo — dead_key_batch e ss3_up
+  # ficam de fora (ver o comentário de 'somente' em menu_ghost_pty.py:main):
+  # rodá-los de novo contra a cópia antiga não prova nada e só gasta tempo.
+  GK_EXPECTED="shift_left ctrl_up alt_left_csi alt_up_csi alt_left_escpfx alt_up_escpfx
+                shift_up ctrl_left
+                delete pageup f5 kitty_u space_in_csi long_params alt_space"
+  gk_bad="$(python3 "$ROOT/tests/menu_ghost_pty.py" "$GKHOME" \
+    "$(printf '%s' "$GK_EXPECTED" | tr -s ' \n' ',')" 2>/dev/null)"
+  missing_regressions=""
+  for expected in $GK_EXPECTED; do
+    case "$gk_bad" in
+      # '=FAIL' logo depois do NOME, não em qualquer lugar do blob inteiro —
+      # senão o FAIL de outro caso bastaria para dar falso positivo aqui.
+      *"$expected=FAIL"*) ;;
+      *) missing_regressions="$missing_regressions $expected" ;;
+    esac
+  done
+  [ -z "$missing_regressions" ] \
+    || { no "o teste-fantasma não pega: o motor de ANTES da OAV2-25 passou sem reprovar$missing_regressions"; gk_ok=0; }
+  rm -rf "$GKHOME" "$GKOLD"
+
+  [ "$gk_ok" = 1 ] && ok "matriz de teclas-fantasma (CSI c/ parâmetro, ESC-prefixado, '~', kitty CSI-u, SS3, Alt+Espaço) drenada sem sobra"
+else
+  skipt "python3 ou /bin/bash ausente — tecla fantasma não exercitada"
+fi
+
+# ---------------------------------------------------------------------------
+echo "21) Menu de composição: adicionar, remover, trocar IA e persistir (OAV2-26)"
+# O ponto cego que tests/menu_pty.py (caso 15) sempre deixou: nunca apertava 'a'
+# (adicionar, grava no team.json na hora), 'd' (remover, idem), Espaço (troca de
+# IA) nem Enter numa linha de agente — só a seta ↓ até '+ adicionar agente' e
+# 'q'. tests/menu_compose_pty.py dirige esses quatro fluxos por pty de verdade e
+# confere o EFEITO no team.json (e no prompt gerado, no caso do 'a'), não a tela.
+cp_ok=1
+if command -v python3 >/dev/null 2>&1 && [ -r /bin/bash ]; then
+  cp_out="$(python3 "$ROOT/tests/menu_compose_pty.py" "$ROOT" 2>/dev/null)"
+  case "$cp_out" in
+    *=FAIL*)
+      no "fluxo de composição falhou:"
+      printf '%s\n' "$cp_out" | grep '=FAIL' | while IFS= read -r line; do
+        printf '       %s\n' "$line" >&2
+      done
+      cp_ok=0 ;;
+  esac
+  [ -n "$cp_out" ] || { no "o teste de composição não devolveu nada — pty morreu cedo demais"; cp_ok=0; }
+  case "$cp_out" in *SESSION_ALIVE*) ;; *) no "o teste de composição não chegou ao fim"; cp_ok=0 ;; esac
+  [ "$cp_ok" = 1 ] && ok "'a' até o fim (com prompt gerado), 'a' cancelado, 'd' com confirmação (s/n/Enter), Espaço e Enter persistindo certo"
+else
+  skipt "python3 ou /bin/bash ausente — menu de composição (add/del/espaço/enter) não exercitado"
+fi
 
 # ---------------------------------------------------------------------------
 printf '\nResultado: \033[1;32m%d passou\033[0m · \033[1;31m%d falhou\033[0m · \033[1;33m%d pulado\033[0m\n\n' \

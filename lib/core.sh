@@ -96,6 +96,8 @@ _orchestra_stamp_project() {
 . "$ORCHESTRA_HOME/lib/team.sh"
 # shellcheck source=/dev/null
 . "$ORCHESTRA_HOME/lib/layout.sh"
+# shellcheck source=/dev/null
+. "$ORCHESTRA_HOME/lib/menu.sh"
 
 # ----- Resolução dos binários dos backends -----
 _resolve_opencode() {
@@ -641,18 +643,11 @@ select_team() {
   # sem terminal controlador (pipe/CI) ou com o time já fixado por env: não abre UI
   if [ -n "$ORCHESTRA_TEAM" ] || ! ( : >/dev/tty ) 2>/dev/null; then return 0; fi
 
-  local names=() backends=() roles=() row=0 nrows key k2 i drawn=0
-  # Quanto esperar pelo resto de uma sequência de seta depois do Esc. O bash 3.2
-  # (o que o macOS traz em /bin/bash) NÃO aceita timeout fracionário em 'read -t':
-  # ele recusa "0.05" com "invalid timeout specification", devolve 1 na hora e
-  # deixa k2 vazio — que é justamente o caso "Esc sozinho". Resultado: TODA seta
-  # fechava o menu (select_team retornava 2 e o zellij nem abria). Detectamos uma
-  # vez e caímos para 1s onde a fração não existe; o atraso só aparece no Esc
-  # solitário, porque numa seta os bytes '[A' já estão no buffer.
-  local esc_wait=0.05
-  case "$( { read -rst 0.05 -n1 _ </dev/null; } 2>&1 )" in
-    *'invalid timeout'*) esc_wait=1 ;;
-  esac
+  # O motor (ler tecla, esconder/devolver cursor, redesenho relativo) mora em
+  # lib/menu.sh — ver o cabeçalho daquele arquivo para as duas armadilhas que ele
+  # carrega (o 'read -t' do bash 3.2 e a âncora absoluta de cursor). Aqui só o
+  # CONTEÚDO deste menu: quais linhas existem e o que cada tecla faz nelas.
+  local names=() backends=() roles=() row=0 nrows key i
   _st_load() {
     names=(leader); backends=("$(team_field leader backend)"); roles=(leader)
     local n
@@ -665,7 +660,6 @@ select_team() {
   }
   _st_row_add()  { echo "${#names[@]}"; }
   _st_row_quit() { echo "$(( ${#names[@]} + 1 ))"; }
-  _st_t() { printf "$@" >/dev/tty; }
   _st_cycle() { # troca o backend da linha corrente
     [ "$row" -lt "${#names[@]}" ] || return 0
     local cur="${backends[$row]}" list=($ORCHESTRA_BACKENDS) j=0 k
@@ -674,10 +668,8 @@ select_team() {
   }
   _st_render() {
     local i arrow lbl b cell line sep desc
-    # sobe as linhas do desenho anterior e apaga dali para baixo. drawn=0 significa
-    # "não há desenho anterior aqui" (1ª vez, ou logo depois das perguntas do a/d).
-    [ "$drawn" -gt 0 ] && _st_t '\033[%dA\r\033[J' "$drawn"
-    _st_t '   \033[2m%s %s %s\033[0m\n' \
+    menu_draw_begin
+    menu_tty '   \033[2m%s %s %s\033[0m\n' \
       "$(_pad AGENTE 14)" "$(_pad "O QUE FAZ" 30)" "IA QUE RODA"
     for i in "${!names[@]}"; do
       [ "$i" = "$row" ] && arrow='\033[1;36m▸\033[0m' || arrow=' '
@@ -691,37 +683,31 @@ select_team() {
         if [ "$b" = "${backends[$i]}" ]; then cell="\033[1;7;36m$b\033[0m"; else cell="\033[2m$b\033[0m"; fi
         line="$line$sep$cell"; sep="\033[2m,\033[0m "
       done
-      _st_t ' %b %s %s %s %b\033[K\n' "$arrow" "$(role_icon "${roles[$i]}")" \
+      menu_tty ' %b %s %s %s %b\033[K\n' "$arrow" "$(role_icon "${roles[$i]}")" \
         "$(_pad "$(_ellipsis "$lbl" 10)" 11)" "$(_pad "$desc" 30)" "$line"
     done
-    _st_t '\033[K\n'
+    menu_tty '\033[K\n'
     [ "$row" = "$(_st_row_add)" ] && arrow='\033[1;36m▸\033[0m' || arrow=' '
-    _st_t ' %b \033[1m+\033[0m adicionar agente\033[K\n' "$arrow"
+    menu_tty ' %b \033[1m+\033[0m adicionar agente\033[K\n' "$arrow"
     [ "$row" = "$(_st_row_quit)" ] && arrow='\033[1;36m▸\033[0m' || arrow=' '
-    _st_t ' %b \033[1m✖\033[0m sair sem abrir\033[K\n' "$arrow"
-    _st_t '\033[K\n'
-    _st_t '   \033[2m↑/↓ navegar · ←/→ trocar a IA · a adicionar · d remover\033[0m\033[K\n'
-    _st_t '   \033[2mEnter abre o time no zellij · q sai sem abrir\033[0m\033[K\n'
+    menu_tty ' %b \033[1m✖\033[0m sair sem abrir\033[K\n' "$arrow"
+    menu_tty '\033[K\n'
+    menu_tty '   \033[2m↑/↓ navegar · ←/→ trocar a IA · a adicionar · d remover\033[0m\033[K\n'
+    menu_tty '   \033[2mEnter abre o time no zellij · q sai sem abrir\033[0m\033[K\n'
     # cabeçalho + agentes + branco + adicionar + sair + branco + 2 de ajuda
-    drawn=$(( ${#names[@]} + 7 ))
-  }
-  # apaga o menu da tela (usado antes das perguntas do 'a'/'d', que passam a ser
-  # impressas no lugar dele em vez de empilhar embaixo)
-  _st_erase() {
-    [ "$drawn" -gt 0 ] && _st_t '\033[%dA\r\033[J' "$drawn"
-    drawn=0
+    menu_draw_end "$(( ${#names[@]} + 7 ))"
   }
   _st_add() {
     local name backend role
-    _st_erase
-    _st_t '\033[?25h\n'
+    menu_erase
+    menu_end; menu_tty '\n'
     # o nome vira argumento de comando ('orchestra send <nome>'), por isso a regra
     # é estrita. Explicamos ANTES e deixamos tentar de novo, em vez de só recusar.
     while true; do
       printf '  nome do agente \033[2m— minúsculas, sem espaços e sem acentos (ex.: tester, deploy-prod)\033[0m\n  ▸ ' >/dev/tty
       read -r name </dev/tty || name=""
       case "$name" in
-        '') printf '  \033[2mcancelado\033[0m\n' >/dev/tty; sleep 1; _st_t '\033[?25l'; return ;;
+        '') printf '  \033[2mcancelado\033[0m\n' >/dev/tty; sleep 1; menu_begin; return ;;
       esac
       if [ "$name" = leader ]; then
         printf '  ✖ "leader" é reservado — troque a IA do líder com ←/→ na linha dele\n' >/dev/tty; continue
@@ -761,44 +747,45 @@ select_team() {
          fi ;;
     esac
     agent_add "$name" "$backend" "$role" "$text" >/dev/null 2>&1
-    _st_load; _st_t '\033[?25l'
+    _st_load; menu_begin
   }
   _st_del() {
     [ "$row" -lt "${#names[@]}" ] || return 0
     [ "${roles[$row]}" = leader ] && return 0
-    _st_erase
-    agent_rm "${names[$row]}" >/dev/null 2>&1
-    _st_load; [ "$row" -ge "$nrows" ] && row=$((nrows-1))
+    menu_erase
+    # menu_confirm() já cuida de mostrar/esconder o cursor (a trap do menu
+    # continua armada) — não é 'menu_end'/'menu_begin' como em '_st_add', que
+    # precisa da tela solta para vários prompts de linha inteira. Default NÃO
+    # (segundo argumento é o aviso mostrado com ⚠): Enter sozinho não remove.
+    if menu_confirm "Remover \"${names[$row]}\" do time?" \
+        "A remoção é permanente. O painel e o histórico dele somem."; then
+      agent_rm "${names[$row]}" >/dev/null 2>&1
+      _st_load; [ "$row" -ge "$nrows" ] && row=$((nrows-1))
+    fi
   }
 
   _st_load
-  _st_t '\n\033[1m🎛️  Monte o time deste projeto\033[0m\n'
-  _st_t '   \033[2m%s\033[0m\n\n' "$ORCHESTRA_PROJECT"
-  _st_t '\033[?25l'
-  trap 'printf "\033[?25h" >/dev/tty' RETURN INT
-  # O redesenho é RELATIVO: sobe 'drawn' linhas a partir de onde o cursor parou (o
-  # fim do menu) e apaga dali para baixo. NÃO usar '\033[s'/'\033[u': a posição que
-  # eles guardam é a linha ABSOLUTA da tela, e quando o menu não cabe na janela o
-  # terminal ROLA — a âncora passa a apontar para o meio do bloco e o redesenho
-  # começa lá, deixando as primeiras linhas do menu antigo acima. Era a duplicação.
-  # A armadilha do movimento relativo (as perguntas do 'a'/'d' deslocam o cursor) é
-  # resolvida por _st_erase + drawn=0, não por posição absoluta.
+  menu_tty '\n\033[1m🎛️  Monte o time deste projeto\033[0m\n'
+  menu_tty '   \033[2m%s\033[0m\n\n' "$ORCHESTRA_PROJECT"
+  menu_begin
   _st_render
   local quit=0
   while true; do
-    IFS= read -rsn1 key </dev/tty || break
+    menu_read_key key || break
     case "$key" in
-      $'\e')
-        # Esc sozinho (sem sequência de seta depois) = sair
-        k2=""
-        read -rsn2 -t "$esc_wait" k2 </dev/tty
-        case "$k2" in
-          '[A') row=$(( (row+nrows-1)%nrows )) ;;
-          '[B') row=$(( (row+1)%nrows )) ;;
-          '[C'|'[D') _st_cycle ;;
-          '')   quit=1; break ;;
-        esac ;;
-      ' ')
+      up)         row=$(( (row+nrows-1)%nrows )) ;;
+      down)       row=$(( (row+1)%nrows )) ;;
+      left|right) _st_cycle ;;
+      esc)        quit=1; break ;;
+      # Sequência de escape reconhecida (por lib/menu.sh) mas não é seta — Delete,
+      # Home/End, PageUp/PageDown, F1-F12, seta em modo aplicação. NÃO é "esc": os
+      # bytes de tela são os mesmos de apertar Esc, mas cancelar a sessão inteira
+      # porque o usuário procurou a tecla Delete (a ajuda do menu diz "d remover")
+      # seria o pior no-op possível. Ignora e segue no laço, como o HEAD fazia
+      # antes de existir um ramo "unknown" (lá, a sequência inteira era ignorada
+      # por falta de qualquer ramo *) neste case).
+      unknown)    : ;;
+      space)
         if   [ "$row" = "$(_st_row_add)" ];  then _st_add
         elif [ "$row" = "$(_st_row_quit)" ]; then quit=1; break
         else _st_cycle; fi ;;
@@ -808,20 +795,20 @@ select_team() {
       a|A) _st_add ;;
       d|D) _st_del ;;
       q|Q) quit=1; break ;;
-      '')
+      enter)
         if   [ "$row" = "$(_st_row_add)" ];  then _st_add
         elif [ "$row" = "$(_st_row_quit)" ]; then quit=1; break
         else break; fi ;;
     esac
     _st_render
   done
-  _st_t '\033[?25h\n'
-  trap - RETURN INT
+  menu_end
+  menu_tty '\n'
 
   # saiu pelo "sair": descarta as trocas de backend feitas na tela e sinaliza
   # cancelamento a quem chamou (o 'up' não abre o zellij).
   if [ "$quit" = 1 ]; then
-    unset -f _st_t _st_cycle _st_render _st_erase _st_load _st_add _st_del _st_row_add _st_row_quit
+    unset -f _st_cycle _st_render _st_load _st_add _st_del _st_row_add _st_row_quit
     return 2
   fi
 
@@ -829,7 +816,7 @@ select_team() {
   local specs=()
   for i in "${!names[@]}"; do specs+=("${names[$i]}=${backends[$i]}:${roles[$i]}"); done
   team_replace "${specs[@]}"
-  unset -f _st_t _st_cycle _st_render _st_erase _st_load _st_add _st_del _st_row_add _st_row_quit
+  unset -f _st_cycle _st_render _st_load _st_add _st_del _st_row_add _st_row_quit
 }
 
 # ---------------------------------------------------------------------------
