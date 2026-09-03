@@ -753,8 +753,15 @@ select_team() {
     [ "$row" -lt "${#names[@]}" ] || return 0
     [ "${roles[$row]}" = leader ] && return 0
     menu_erase
-    agent_rm "${names[$row]}" >/dev/null 2>&1
-    _st_load; [ "$row" -ge "$nrows" ] && row=$((nrows-1))
+    # menu_confirm() já cuida de mostrar/esconder o cursor (a trap do menu
+    # continua armada) — não é 'menu_end'/'menu_begin' como em '_st_add', que
+    # precisa da tela solta para vários prompts de linha inteira. Default NÃO
+    # (segundo argumento é o aviso mostrado com ⚠): Enter sozinho não remove.
+    if menu_confirm "Remover \"${names[$row]}\" do time?" \
+        "A remoção é permanente. O painel e o histórico dele somem."; then
+      agent_rm "${names[$row]}" >/dev/null 2>&1
+      _st_load; [ "$row" -ge "$nrows" ] && row=$((nrows-1))
+    fi
   }
 
   _st_load
