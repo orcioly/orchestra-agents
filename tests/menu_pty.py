@@ -26,14 +26,14 @@ Existe porque os bugs que este teste cobre só aparecem num terminal DE VERDADE:
      ninguém notar (só a seta ↓ era dirigida aqui).
 
   4. "O pty respondeu" não é "a seta funcionou". Achado da revisão da
-     OAV2-26: a versão anterior de caso_quatro_setas só media se ALGUM byte
+     OAV2-26: a versão anterior de case_four_arrows só media se ALGUM byte
      saiu depois de cada tecla — e como _st_render roda de novo a cada volta
      do laço, isso é verdade mesmo para uma seta 100% inerte. Prova: trocar
      'up) row=...' por 'up) : ;;' e 'left|right) _st_cycle' por
      'left|right) : ;;' em lib/core.sh deixava ↑/←/→ completamente sem
      efeito, e a suíte inteira continuava passando. Por isso cada seta agora
      tem uma asserção de EFEITO na tela (cursor ▸ na linha certa, ou destaque
-     de IA na célula certa) — ver caso_quatro_setas.
+     de IA na célula certa) — ver case_four_arrows.
 
 ISOLAMENTO: ORCHESTRA_STATE aponta para um tempdir próprio, apagado no fim —
 achado da OAV2-26. Sem isto, rodado standalone (fora de tests/smoke.sh, que
@@ -111,26 +111,26 @@ def _close(pid, fd):
 # os mesmos códigos que _st_render (lib/core.sh) usa para marcar a linha e a
 # IA correntes. Casar "na mesma linha de tela" (sem cruzar '\n') é o que
 # garante que a seta/destaque achado é da linha certa, não de outra abaixo.
-_SETA = "\033[1;36m▸\033[0m".encode("utf-8")
-_DESTAQUE = "\033[1;7;36m".encode("utf-8")
+_ARROW = "\033[1;36m▸\033[0m".encode("utf-8")
+_HIGHLIGHT = "\033[1;7;36m".encode("utf-8")
 _RESET = "\033[0m".encode("utf-8")
 
 
-def cursor_na_linha(rotulo, tela):
-    """O ▸ em destaque aparece antes de 'rotulo' (ex.: 'CODER'), sem '\\n'
+def cursor_on_line(label, screen):
+    """O ▸ em destaque aparece antes de 'label' (ex.: 'CODER'), sem '\\n'
     entre os dois — ou seja, na MESMA linha desenhada por _st_render."""
-    padrao = re.escape(_SETA) + rb"[^\n]*?" + rotulo.encode("utf-8")
-    return re.search(padrao, tela) is not None
+    pattern = re.escape(_ARROW) + rb"[^\n]*?" + label.encode("utf-8")
+    return re.search(pattern, screen) is not None
 
 
-def destaque_no_backend(rotulo, backend, tela):
-    """A célula de IA 'backend' está em destaque na linha de 'rotulo'."""
-    padrao = (rotulo.encode("utf-8") + rb"[^\n]*?" + re.escape(_DESTAQUE)
+def backend_is_highlighted(label, backend, screen):
+    """A célula de IA 'backend' está em destaque na linha de 'label'."""
+    pattern = (label.encode("utf-8") + rb"[^\n]*?" + re.escape(_HIGHLIGHT)
                + backend.encode("utf-8") + re.escape(_RESET))
-    return re.search(padrao, tela) is not None
+    return re.search(pattern, screen) is not None
 
 
-def caso_setas_e_redesenho(home):
+def case_arrows_and_redraw(home):
     """Seta ↓ três vezes (líder → coder → reviewer → adicionar): cobre o
     redesenho relativo e a chegada em '+ adicionar agente'."""
     proj = tempfile.mkdtemp()
@@ -139,30 +139,30 @@ def caso_setas_e_redesenho(home):
         pid, fd = _spawn(home, proj, state)
         drain(fd, 2.0)
 
-        saida = []
+        output = []
         for _ in range(3):
             try:
                 os.write(fd, b"\x1b[B")
             except OSError:
-                print("MENU_MORREU")
+                print("MENU_DIED")
                 return
-            pedaco = drain(fd, 0.8)
-            if not pedaco:                     # o menu saiu do ar: pty sem resposta
-                print("MENU_MORREU")
+            chunk = drain(fd, 0.8)
+            if not chunk:                      # o menu saiu do ar: pty sem resposta
+                print("MENU_DIED")
                 return
-            if b"invalid timeout" in pedaco:
-                print("TIMEOUT_INVALIDO")
-            saida.append(pedaco)
+            if b"invalid timeout" in chunk:
+                print("INVALID_TIMEOUT")
+            output.append(chunk)
 
-        tudo = b"".join(saida)
-        print("SETA_VIVA")
-        if b"\x1b[u" in tudo:
-            print("ANCORA_ABSOLUTA")
-        if re.search(rb"\x1b\[\d+A", tudo):
-            print("REDESENHO_RELATIVO")
+        combined = b"".join(output)
+        print("ARROW_ALIVE")
+        if b"\x1b[u" in combined:
+            print("ABSOLUTE_ANCHOR")
+        if re.search(rb"\x1b\[\d+A", combined):
+            print("RELATIVE_REDRAW")
         # a seta (▸ = U+25B8) parada na linha do '+ adicionar agente'
-        if re.search("\033\\[1;36m▸\033\\[0m \033\\[1m\\+".encode("utf-8"), tudo):
-            print("CHEGOU_NO_ADICIONAR")
+        if re.search("\033\\[1;36m▸\033\\[0m \033\\[1m\\+".encode("utf-8"), combined):
+            print("REACHED_ADD")
 
         try:
             os.write(fd, b"q")
@@ -176,7 +176,7 @@ def caso_setas_e_redesenho(home):
         shutil.rmtree(state, ignore_errors=True)
 
 
-def caso_quatro_setas(home):
+def case_four_arrows(home):
     """As 4 setas navegam de verdade (não só ↓, que já é coberta acima), cada
     uma com um EFEITO OBSERVÁVEL na tela — não apenas "saiu algum byte" (ver
     item 4 do cabeçalho do módulo):
@@ -194,44 +194,44 @@ def caso_quatro_setas(home):
         pid, fd = _spawn(home, proj, state)
         drain(fd, 2.0)
 
-        def tecla(seq):
+        def press_key(seq):
             try:
                 os.write(fd, seq)
             except OSError:
                 return None
             return drain(fd, 0.6)
 
-        tela = tecla(b"\x1b[B")                        # desce: líder -> coder
-        if not tela:
-            print("MENU_MORREU"); return
-        if cursor_na_linha("CODER", tela):
-            print("DESCE_PARA_CODER")
+        screen = press_key(b"\x1b[B")                  # desce: líder -> coder
+        if not screen:
+            print("MENU_DIED"); return
+        if cursor_on_line("CODER", screen):
+            print("MOVES_DOWN_TO_CODER")
 
-        tela = tecla(b"\x1b[B")                        # desce: coder -> reviewer
-        if not tela:
-            print("MENU_MORREU"); return
-        if cursor_na_linha("REVIEWER", tela):
-            print("DESCE_PARA_REVIEWER")
+        screen = press_key(b"\x1b[B")                  # desce: coder -> reviewer
+        if not screen:
+            print("MENU_DIED"); return
+        if cursor_on_line("REVIEWER", screen):
+            print("MOVES_DOWN_TO_REVIEWER")
 
-        tela = tecla(b"\x1b[A")                        # sobe: reviewer -> coder
-        if not tela:
-            print("MENU_MORREU"); return
-        if cursor_na_linha("CODER", tela):
-            print("SOBE_PARA_CODER")
+        screen = press_key(b"\x1b[A")                  # sobe: reviewer -> coder
+        if not screen:
+            print("MENU_DIED"); return
+        if cursor_on_line("CODER", screen):
+            print("MOVES_UP_TO_CODER")
 
-        tela = tecla(b"\x1b[C")                        # direita: opencode -> codex
-        if not tela:
-            print("MENU_MORREU"); return
-        if destaque_no_backend("CODER", "codex", tela):
-            print("DIREITA_TROCA_PARA_CODEX")
+        screen = press_key(b"\x1b[C")                  # direita: opencode -> codex
+        if not screen:
+            print("MENU_DIED"); return
+        if backend_is_highlighted("CODER", "codex", screen):
+            print("RIGHT_SWITCHES_TO_CODEX")
 
-        tela = tecla(b"\x1b[D")                        # esquerda: codex -> claude
-        if not tela:
-            print("MENU_MORREU"); return
-        if destaque_no_backend("CODER", "claude", tela):
-            print("ESQUERDA_TROCA_PARA_CLAUDE")
+        screen = press_key(b"\x1b[D")                  # esquerda: codex -> claude
+        if not screen:
+            print("MENU_DIED"); return
+        if backend_is_highlighted("CODER", "claude", screen):
+            print("LEFT_SWITCHES_TO_CLAUDE")
 
-        print("QUATRO_SETAS_VIVAS")
+        print("FOUR_ARROWS_ALIVE")
         try:
             os.write(fd, b"q")
             drain(fd, 0.8)
@@ -244,23 +244,23 @@ def caso_quatro_setas(home):
         shutil.rmtree(state, ignore_errors=True)
 
 
-def caso_esc_cancela(home):
+def case_esc_cancels(home):
     """Esc sozinho cancela a sessão inteira: select_team devolve rc 2 e o
     'up' não abre o zellij."""
     proj = tempfile.mkdtemp()
     state = tempfile.mkdtemp()
     try:
         pid, fd = _spawn(home, proj, state)
-        saida = drain(fd, 2.0)
+        output = drain(fd, 2.0)
         try:
             os.write(fd, b"\x1b")
         except OSError:
-            print("MENU_MORREU")
+            print("MENU_DIED")
             return
-        saida += drain(fd, 1.5)
+        output += drain(fd, 1.5)
         _close(pid, fd)
-        if b"RC=2" in saida:
-            print("ESC_CANCELA")
+        if b"RC=2" in output:
+            print("ESC_CANCELS")
     finally:
         import shutil
         shutil.rmtree(proj, ignore_errors=True)
@@ -269,9 +269,9 @@ def caso_esc_cancela(home):
 
 def main():
     home, proj = sys.argv[1], sys.argv[2]
-    caso_setas_e_redesenho(home)
-    caso_quatro_setas(home)
-    caso_esc_cancela(home)
+    case_arrows_and_redraw(home)
+    case_four_arrows(home)
+    case_esc_cancels(home)
     # 'proj' segue aceito por compatibilidade de chamada (tests/smoke.sh
     # passa um diretório de projeto); não é mais usado diretamente aqui —
     # cada caso sobe o seu próprio, isolado.

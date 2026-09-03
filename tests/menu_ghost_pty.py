@@ -66,7 +66,7 @@ OAV2-26 ampliou esta matriz com três itens medidos na revisão da OAV2-25:
     pontos (1º render, cancelamento do prompt 'adicionar', TEAM_FILE= no
     fim) — mesmo motivo do 'quiet=1.5' que ela substitui: atravessar o
     'sleep 1' de _st_add sem depender de um limiar de tempo calibrado à mão.
-    O envio da sequência SUSPEITA continua por silêncio (função 'enviar',
+    O envio da sequência SUSPEITA continua por silêncio (função 'send',
     inalterada nesse ponto): drenar por marcador ali pararia no PRIMEIRO
     redesenho, que no motor antigo acontece VÁRIAS vezes ANTES do atalho
     vazar (cada byte sobrando é uma iteração de laço com seu próprio
@@ -82,8 +82,8 @@ o team.json de teste no estado REAL do usuário. Nenhum teste pode encostar
 nisso.
 
 Uso:  menu_ghost_pty.py <ORCHESTRA_HOME>
-Imprime uma linha 'CASE:<nome>=OK|FAIL:<motivo>' ou 'PROBE:<nome>=OK|FAIL:<motivo>'
-por caso, e 'SESSAO_VIVA' no fim — o smoke.sh casa com 'case'/'grep'.
+Imprime uma linha 'CASE:<name>=OK|FAIL:<motivo>' ou 'PROBE:<name>=OK|FAIL:<motivo>'
+por caso, e 'SESSION_ALIVE' no fim — o smoke.sh casa com 'case'/'grep'.
 """
 
 import fcntl
@@ -129,6 +129,9 @@ def drain(fd, seconds=1.2, quiet=0.3):
 RENDER_MARK = "q sai sem abrir".encode("utf-8")
 # aparece quando _st_add abre de verdade (o prompt de nome do agente).
 PROMPT_MARK = "nome do agente".encode("utf-8")
+# aparece quando uma sobra 'delete' vaza até o ramo 'd/D' e abre a confirmação
+# de _st_del (OAV2-27) — sufixo fixo de menu_confirm(), lib/menu.sh.
+CONFIRM_MARK = "[s/N]".encode("utf-8")
 
 
 def drain_until(fd, markers, deadline=8.0):
@@ -253,26 +256,39 @@ def run_session_case(home, seq, kind):
         pid, fd = _spawn(script)
         # OAV2-26: marcador em vez de silêncio no 1º render — ele aparece assim
         # que _st_render desenha pela primeira vez, sem esperar os 2s fixos.
-        saida, _ = drain_until(fd, [RENDER_MARK], deadline=8.0)
+        output, _ = drain_until(fd, [RENDER_MARK], deadline=8.0)
 
-        def enviar(bts, wait=1.2, quiet=0.3):
-            nonlocal saida
+        def send(bts, wait=1.2, quiet=0.3):
+            nonlocal output
             os.write(fd, bts)
-            saida += drain(fd, wait, quiet)
+            output += drain(fd, wait, quiet)
 
         try:
-            enviar(b"\x1b[B")  # líder -> coder: é sob este agente que a sequência mira
+            send(b"\x1b[B")  # líder -> coder: é sob este agente que a sequência mira
             # Aqui o envio continua por SILÊNCIO, de propósito (ver o comentário
             # do módulo): no motor antigo o atalho pode vazar várias iterações
             # de laço depois do 1º redesenho, e parar no primeiro marcador
             # perderia justamente esse vazamento.
-            enviar(seq)
+            send(seq)
         except OSError:
-            return "FAIL:menu_morreu"
+            return "FAIL:menu_died"
 
-        abriu = kind == "add" and b"nome do agente" in saida
+        # No motor ANTIGO, a sobra de uma sequência 'delete' cai no ramo 'd/D'
+        # e abre a confirmação de _st_del (OAV2-27), que bloqueia esperando
+        # resposta em /dev/tty. Sem checar isto aqui, o 'q' mandado mais
+        # abaixo para sair do menu vira a RESPOSTA da pergunta (não o 'q' que
+        # sai): o menu nunca sai, TEAM_FILE= nunca aparece, e o caso estoura
+        # os 8s de deadline seguinte em 'FAIL:no_team_file' — o MESMO motivo
+        # genérico de um pty morto, que não prova mais nada sobre o vazamento
+        # (achado da revisão da OAV2-27/OAV2-29). 'send(seq)' já é síncrono o
+        # bastante para isto: a pergunta aparece assim que _st_del roda, sem
+        # sleep de permeio.
+        if kind == "delete" and CONFIRM_MARK in output:
+            return "FAIL:delete_prompt_leaked"
+
+        opened = kind == "add" and b"nome do agente" in output
         try:
-            if abriu:
+            if opened:
                 # _st_add trata '' como cancelar, imprime 'cancelado' e só ENTÃO
                 # dorme 1s antes de devolver o controle ao laço principal. A
                 # linha de ajuda 'q sai sem abrir' só reaparece quando
@@ -281,37 +297,37 @@ def run_session_case(home, seq, kind):
                 # tempo calibrado à mão (era 'quiet=1.5', ~1,5s a mais por caso
                 # 'add'; achado da OAV2-26, medido).
                 os.write(fd, b"\n")
-                pedaco, _ = drain_until(fd, [RENDER_MARK], deadline=10.0)
-                saida += pedaco
+                chunk, _ = drain_until(fd, [RENDER_MARK], deadline=10.0)
+                output += chunk
             os.write(fd, b"q")
         except OSError:
             pass
         # marcador de novo, não silêncio, para o fim do processo.
-        pedaco, _ = drain_until(fd, [b"TEAM_FILE="], deadline=8.0)
-        saida += pedaco
+        chunk, _ = drain_until(fd, [b"TEAM_FILE="], deadline=8.0)
+        output += chunk
 
         team_file = ""
-        for linha in saida.decode("utf-8", "replace").splitlines():
-            if linha.startswith("TEAM_FILE="):
-                team_file = linha.split("=", 1)[1].strip()
+        for line in output.decode("utf-8", "replace").splitlines():
+            if line.startswith("TEAM_FILE="):
+                team_file = line.split("=", 1)[1].strip()
         if not team_file or not os.path.isfile(team_file):
-            return "FAIL:sem_team_file"
+            return "FAIL:no_team_file"
         try:
-            atual = _team_agent_names(team_file)
+            current = _team_agent_names(team_file)
         except (ValueError, OSError):
-            return "FAIL:team_json_invalido"
+            return "FAIL:invalid_team_json"
 
-        # 'abriu' é o sintoma direto do bug em cima de teclas 'add' (a sobra
+        # 'opened' é o sintoma direto do bug em cima de teclas 'add' (a sobra
         # bateu no ramo a/A e o prompt abriu sem o usuário pedir) — reprova
         # mesmo se o cancelamento tiver deixado o team.json intacto, porque o
         # prompt ter aberto sozinho JÁ é o vazamento que este teste existe pra
-        # pegar. 'time_alterado' é o cinto-e-suspensório: cobre tanto o
+        # pegar. 'team_changed' é o cinto-e-suspensório: cobre tanto o
         # apagão direto (ramo d/D) quanto qualquer forma de a sequência ter
         # deixado o time diferente do que era, mesmo sem o prompt aparecer.
-        if abriu:
-            return "FAIL:add_opened_sem_pedido"
-        if atual != EXPECTED_AGENTS:
-            return "FAIL:time_alterado:%s" % ",".join(atual)
+        if opened:
+            return "FAIL:add_opened_unprompted"
+        if current != EXPECTED_AGENTS:
+            return "FAIL:team_changed:%s" % ",".join(current)
         return "OK"
     finally:
         if fd is not None:
@@ -338,7 +354,7 @@ def run_dead_key_batch(home):
     proj = tempfile.mkdtemp()
     state = tempfile.mkdtemp()
     pid = fd = None
-    problemas = []
+    issues = []
     try:
         script = "\n".join([
             'export ORCHESTRA_HOME="%s"' % home,
@@ -353,47 +369,47 @@ def run_dead_key_batch(home):
             'echo "TEAM_FILE=$(team_file)"',
         ])
         pid, fd = _spawn(script)
-        saida, _ = drain_until(fd, [RENDER_MARK], deadline=8.0)
+        output, _ = drain_until(fd, [RENDER_MARK], deadline=8.0)
 
-        def enviar(bts, wait=1.2, quiet=0.3):
-            nonlocal saida
+        def send(bts, wait=1.2, quiet=0.3):
+            nonlocal output
             os.write(fd, bts)
-            saida += drain(fd, wait, quiet)
+            output += drain(fd, wait, quiet)
 
         try:
-            enviar(b"\x1b[B")  # líder -> coder
-            for nome, seq in DEAD_KEY_BATCH:
-                antes = len(saida)
+            send(b"\x1b[B")  # líder -> coder
+            for name, seq in DEAD_KEY_BATCH:
+                before = len(output)
                 # a sequência suspeita e a seta de prova de vida viajam JUNTAS
                 # num único write/drain — metade das idas ao pty de mandar as
                 # duas em separado, sem perder o que cada uma prova.
-                enviar(seq + b"\x1b[B")
-                pedaco = saida[antes:]
-                if b"nome do agente" in pedaco:
-                    problemas.append("%s:abriu_add" % nome)
-                    enviar(b"\n")  # cancela o prompt e segue o roteiro
-                elif not pedaco:
-                    problemas.append("%s:menu_travou" % nome)
+                send(seq + b"\x1b[B")
+                chunk = output[before:]
+                if b"nome do agente" in chunk:
+                    issues.append("%s:opened_add" % name)
+                    send(b"\n")  # cancela o prompt e segue o roteiro
+                elif not chunk:
+                    issues.append("%s:menu_stuck" % name)
             os.write(fd, b"q")
         except OSError:
-            return "FAIL:menu_morreu"
-        pedaco, _ = drain_until(fd, [b"TEAM_FILE="], deadline=8.0)
-        saida += pedaco
+            return "FAIL:menu_died"
+        chunk, _ = drain_until(fd, [b"TEAM_FILE="], deadline=8.0)
+        output += chunk
 
         team_file = ""
-        for linha in saida.decode("utf-8", "replace").splitlines():
-            if linha.startswith("TEAM_FILE="):
-                team_file = linha.split("=", 1)[1].strip()
+        for line in output.decode("utf-8", "replace").splitlines():
+            if line.startswith("TEAM_FILE="):
+                team_file = line.split("=", 1)[1].strip()
         if not team_file or not os.path.isfile(team_file):
-            return "FAIL:sem_team_file"
+            return "FAIL:no_team_file"
         try:
-            atual = _team_agent_names(team_file)
+            current = _team_agent_names(team_file)
         except (ValueError, OSError):
-            return "FAIL:team_json_invalido"
-        if atual != EXPECTED_AGENTS:
-            problemas.append("time_alterado:%s" % ",".join(atual))
-        if problemas:
-            return "FAIL:" + ";".join(problemas)
+            return "FAIL:invalid_team_json"
+        if current != EXPECTED_AGENTS:
+            issues.append("team_changed:%s" % ",".join(current))
+        if issues:
+            return "FAIL:" + ";".join(issues)
         return "OK"
     finally:
         if fd is not None:
@@ -440,20 +456,20 @@ def run_probe_case(home, seq):
         os.write(fd, seq + b"x")
     except OSError:
         _close(pid, fd)
-        return "FAIL:menu_morreu"
-    saida = drain(fd, 2.5, quiet=0.4)
+        return "FAIL:menu_died"
+    output = drain(fd, 2.5, quiet=0.4)
     _close(pid, fd)
     k1 = k2 = None
-    for linha in saida.decode("utf-8", "replace").splitlines():
-        if linha.startswith("K1="):
+    for line in output.decode("utf-8", "replace").splitlines():
+        if line.startswith("K1="):
             try:
-                k1 = linha.split("K1=[", 1)[1].split("]", 1)[0]
-                k2 = linha.split("K2=[", 1)[1].split("]", 1)[0]
+                k1 = line.split("K1=[", 1)[1].split("]", 1)[0]
+                k2 = line.split("K2=[", 1)[1].split("]", 1)[0]
             except IndexError:
                 pass
     if k2 is None:
-        return "FAIL:sem_resposta"
-    return "OK" if k2 == "x" else "FAIL:K1=%s,K2=%s(esperado x)" % (k1, k2)
+        return "FAIL:no_response"
+    return "OK" if k2 == "x" else "FAIL:K1=%s,K2=%s(expected x)" % (k1, k2)
 
 
 # OAV2-26: achado da revisão da OAV2-25 que só ganhou teste agora — as duas
@@ -488,19 +504,19 @@ def run_probe_k1_case(home, seq):
         os.write(fd, seq)
     except OSError:
         _close(pid, fd)
-        return "FAIL:menu_morreu"
-    saida = drain(fd, 2.5, quiet=0.4)
+        return "FAIL:menu_died"
+    output = drain(fd, 2.5, quiet=0.4)
     _close(pid, fd)
     k1 = None
-    for linha in saida.decode("utf-8", "replace").splitlines():
-        if linha.startswith("K1="):
+    for line in output.decode("utf-8", "replace").splitlines():
+        if line.startswith("K1="):
             try:
-                k1 = linha.split("K1=[", 1)[1].split("]", 1)[0]
+                k1 = line.split("K1=[", 1)[1].split("]", 1)[0]
             except IndexError:
                 pass
     if k1 is None:
-        return "FAIL:sem_resposta"
-    return "OK" if k1 == "unknown" else "FAIL:K1=%s(esperado unknown)" % k1
+        return "FAIL:no_response"
+    return "OK" if k1 == "unknown" else "FAIL:K1=%s(expected unknown)" % k1
 
 
 def main():
@@ -512,23 +528,23 @@ def main():
     # entram nessa lista (são inertes nos dois motores, não provam regressão
     # nenhuma ali), e rodá-los de novo contra a cópia antiga só gastaria tempo
     # à toa — foi o que estourou a suíte para além de 1min30 (medido).
-    somente = set(sys.argv[2].split(",")) if len(sys.argv) > 2 and sys.argv[2] else None
+    only = set(sys.argv[2].split(",")) if len(sys.argv) > 2 and sys.argv[2] else None
 
-    def quer(nome):
-        return somente is None or nome in somente
+    def wants(name):
+        return only is None or name in only
 
     for name, seq, kind in SESSION_CASES:
-        if quer(name):
+        if wants(name):
             print("CASE:%s=%s" % (name, run_session_case(home, seq, kind)))
-    if quer("dead_key_batch"):
+    if wants("dead_key_batch"):
         print("CASE:dead_key_batch=%s" % run_dead_key_batch(home))
     for name, seq in PROBE_CASES:
-        if quer(name):
+        if wants(name):
             print("PROBE:%s=%s" % (name, run_probe_case(home, seq)))
     for name, seq in PROBE_K1_CASES:
-        if quer(name):
+        if wants(name):
             print("PROBE:%s=%s" % (name, run_probe_k1_case(home, seq)))
-    print("SESSAO_VIVA")
+    print("SESSION_ALIVE")
 
 
 if __name__ == "__main__":

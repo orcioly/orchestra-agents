@@ -13,12 +13,23 @@ aperta de propósito — team.json e o prompt_file gerado —, não sobra de byt
 nem redesenho. Reaproveita o padrão de isolamento e drain_until (marcador em
 vez de silêncio) já validado em tests/menu_ghost_pty.py.
 
-ACHADO ao escrever este roteiro: _st_del ('d', lib/core.sh) remove o agente
-IMEDIATAMENTE — não há 'menu_confirm' nenhuma no caminho, embora
-'menu_confirm' exista em lib/menu.sh (linha 253) — está definida, mas sem
-NENHUMA chamada no repositório inteiro. O caso 'del_sem_confirmacao' abaixo
-testa o comportamento REAL (sem confirmação) e não o que seria mais seguro;
-relatado, não corrigido — mexer em lib/core.sh está fora do escopo desta task.
+OAV2-27: o achado registrado aqui ao escrever o roteiro original — _st_del
+('d', lib/core.sh) removia o agente IMEDIATAMENTE, sem nenhuma chamada a
+'menu_confirm' (lib/menu.sh linha 253) em todo o repositório — foi corrigido.
+'d' agora pede confirmação (nome do agente visível na pergunta, default NÃO:
+Enter sozinho não remove) antes de chamar agent_rm. O caso
+'delete_with_confirmation' abaixo cobre 's'/'n'/Enter sozinho; substitui o
+antigo 'del_sem_confirmacao'.
+
+Não há aqui um caso de "tecla fantasma parou na confirmação": com o motor
+ATUAL a sequência ghost já é drenada como 'unknown' antes de chegar a 'd', e
+um caso que manda essa sequência daqui nunca exercita _st_del de verdade —
+achado da revisão da rodada 3 (o revisor reverteu _st_del para a versão sem
+confirmação e o caso continuou 'OK', prova de que ele não testava nada). A
+segunda camada (a sobra REALMENTE chegando a 'd', contra uma cópia do motor
+PRÉ-OAV2-25) é responsabilidade de 'run_session_case' em
+tests/menu_ghost_pty.py, que agora devolve 'FAIL:delete_prompt_leaked' com
+precisão quando isso acontece.
 
 ISOLAMENTO: cada caso sobe seu PRÓPRIO ORCHESTRA_STATE e projeto (tempdir,
 apagados no fim) — nunca o do processo que chama este script (mesma razão
@@ -30,7 +41,7 @@ no PATH antes de qualquer teste); para rodar este arquivo sozinho, ele sobe
 os mesmos stubs num tempdir próprio e antepõe ao PATH.
 
 Uso:  menu_compose_pty.py <ORCHESTRA_HOME>
-Imprime 'CASE:<nome>=OK|FAIL:<motivo>' por caso e 'SESSAO_VIVA' no fim.
+Imprime 'CASE:<name>=OK|FAIL:<motivo>' por caso e 'SESSION_ALIVE' no fim.
 """
 
 import fcntl
@@ -56,11 +67,14 @@ EXPECTED_AGENTS = ["coder", "reviewer"]
 # subida, e todo redesenho depois de uma ação) — marcador de "voltou ao
 # laço principal", em vez de esperar por silêncio.
 RENDER_MARK = "q sai sem abrir".encode("utf-8")
-PROMPT_NOME = "nome do agente".encode("utf-8")
-PROMPT_FUNCAO = "função — pronta".encode("utf-8")
-PROMPT_IA = "qual IA roda esse agente".encode("utf-8")
-PROMPT_DESC = "o que ele faz?".encode("utf-8")
-MARK_CANCELADO = "cancelado".encode("utf-8")
+PROMPT_NAME = "nome do agente".encode("utf-8")
+PROMPT_ROLE = "função — pronta".encode("utf-8")
+PROMPT_BACKEND = "qual IA roda esse agente".encode("utf-8")
+PROMPT_DESCRIPTION = "o que ele faz?".encode("utf-8")
+MARK_CANCELLED = "cancelado".encode("utf-8")
+# menu_confirm() (lib/menu.sh) sempre termina a pergunta com este sufixo,
+# independente do texto da pergunta em si.
+MARK_CONFIRM = "[s/N]".encode("utf-8")
 
 
 def _fake_backends():
@@ -152,7 +166,7 @@ def _agent(team_file, name):
     return None
 
 
-class Sessao:
+class Session:
     """Um select_team isolado, dirigido por pty. Cada caso cria a sua."""
 
     def __init__(self, home):
@@ -173,27 +187,27 @@ class Sessao:
             'echo "TEAM_FILE=$(team_file)"',
         ])
         self.pid, self.fd = _spawn(script)
-        self.saida, self.achou = drain_until(self.fd, [RENDER_MARK], deadline=8.0)
+        self.output, self.found = drain_until(self.fd, [RENDER_MARK], deadline=8.0)
 
-    def enviar(self, bts, markers=(RENDER_MARK,), deadline=8.0):
+    def send(self, bts, markers=(RENDER_MARK,), deadline=8.0):
         """Escreve bytes e espera por QUALQUER marcador da lista. Devolve o
         marcador achado (ou None, se estourou o prazo)."""
         os.write(self.fd, bts)
-        pedaco, achou = drain_until(self.fd, list(markers), deadline)
-        self.saida += pedaco
-        self.achou = achou
-        return achou
+        chunk, found = drain_until(self.fd, list(markers), deadline)
+        self.output += chunk
+        self.found = found
+        return found
 
-    def texto(self):
-        return self.saida.decode("utf-8", "replace")
+    def text(self):
+        return self.output.decode("utf-8", "replace")
 
-    def fechar(self, extra=b"q"):
+    def close(self, extra=b"q"):
         try:
-            if b"TEAM_FILE=" not in self.saida:
+            if b"TEAM_FILE=" not in self.output:
                 if extra:
                     os.write(self.fd, extra)
-                pedaco, _ = drain_until(self.fd, [b"TEAM_FILE="], deadline=8.0)
-                self.saida += pedaco
+                chunk, _ = drain_until(self.fd, [b"TEAM_FILE="], deadline=8.0)
+                self.output += chunk
             elif extra:
                 os.write(self.fd, extra)
         except OSError:
@@ -201,18 +215,18 @@ class Sessao:
         _close(self.pid, self.fd)
 
     def team_file(self):
-        for linha in self.texto().splitlines():
-            if linha.startswith("TEAM_FILE="):
-                return linha.split("=", 1)[1].strip()
+        for line in self.text().splitlines():
+            if line.startswith("TEAM_FILE="):
+                return line.split("=", 1)[1].strip()
         return ""
 
     def rc(self):
-        for linha in self.texto().splitlines():
-            if linha.startswith("RC="):
-                return linha.split("=", 1)[1].strip()
+        for line in self.text().splitlines():
+            if line.startswith("RC="):
+                return line.split("=", 1)[1].strip()
         return None
 
-    def limpar(self):
+    def cleanup(self):
         shutil.rmtree(self.proj, ignore_errors=True)
         shutil.rmtree(self.state, ignore_errors=True)
         shutil.rmtree(self.fakebin, ignore_errors=True)
@@ -226,165 +240,181 @@ def case_add_full(home):
     """'a' de ponta a ponta: nome, função (não-preset, então pede descrição),
     IA e descrição — confirma o agente novo no team.json (role=custom,
     prompt_file) E o conteúdo do prompt gerado."""
-    s = Sessao(home)
+    s = Session(home)
     try:
-        if s.achou != RENDER_MARK:
-            return "FAIL:sem_1o_render"
-        if s.enviar(b"a", markers=(PROMPT_NOME,)) != PROMPT_NOME:
-            return "FAIL:prompt_nome_nao_abriu"
-        if s.enviar(b"compx\n", markers=(PROMPT_FUNCAO,)) != PROMPT_FUNCAO:
-            return "FAIL:prompt_funcao_nao_abriu"
-        if s.enviar(b"deploy-role\n", markers=(PROMPT_IA,)) != PROMPT_IA:
-            return "FAIL:prompt_ia_nao_abriu"
-        if s.enviar(b"opencode\n", markers=(PROMPT_DESC,)) != PROMPT_DESC:
-            return "FAIL:prompt_descricao_nao_abriu"
-        if s.enviar(b"Faz deploy para producao sem downtime\n",
-                     markers=(RENDER_MARK,)) != RENDER_MARK:
-            return "FAIL:nao_voltou_ao_menu"
-        s.fechar(b"q")
+        if s.found != RENDER_MARK:
+            return "FAIL:no_first_render"
+        if s.send(b"a", markers=(PROMPT_NAME,)) != PROMPT_NAME:
+            return "FAIL:name_prompt_did_not_open"
+        if s.send(b"compx\n", markers=(PROMPT_ROLE,)) != PROMPT_ROLE:
+            return "FAIL:role_prompt_did_not_open"
+        if s.send(b"deploy-role\n", markers=(PROMPT_BACKEND,)) != PROMPT_BACKEND:
+            return "FAIL:backend_prompt_did_not_open"
+        if s.send(b"opencode\n", markers=(PROMPT_DESCRIPTION,)) != PROMPT_DESCRIPTION:
+            return "FAIL:description_prompt_did_not_open"
+        if s.send(b"Faz deploy para producao sem downtime\n",
+                   markers=(RENDER_MARK,)) != RENDER_MARK:
+            return "FAIL:did_not_return_to_menu"
+        s.close(b"q")
         tf = s.team_file()
         if not tf or not os.path.isfile(tf):
-            return "FAIL:sem_team_file"
+            return "FAIL:no_team_file"
         a = _agent(tf, "compx")
         if a is None:
-            return "FAIL:agente_nao_entrou_no_team_json"
+            return "FAIL:agent_missing_from_team_json"
         if a.get("backend") != "opencode":
-            return "FAIL:backend_errado:%s" % a.get("backend")
+            return "FAIL:wrong_backend:%s" % a.get("backend")
         if a.get("role") != "custom":
-            return "FAIL:role_deveria_ser_custom:%s" % a.get("role")
+            return "FAIL:role_should_be_custom:%s" % a.get("role")
         pf = a.get("prompt_file") or ""
         if pf != "prompts/compx.md":
-            return "FAIL:prompt_file_inesperado:%s" % pf
+            return "FAIL:unexpected_prompt_file:%s" % pf
         prompt_path = os.path.join(os.path.dirname(tf), pf)
         if not os.path.isfile(prompt_path):
-            return "FAIL:prompt_nao_foi_gerado"
-        conteudo = open(prompt_path, encoding="utf-8").read()
-        if "Faz deploy para producao sem downtime" not in conteudo:
-            return "FAIL:prompt_sem_a_descricao_digitada"
-        if "compx" not in conteudo:
-            return "FAIL:prompt_sem_o_nome_do_agente"
+            return "FAIL:prompt_not_generated"
+        content = open(prompt_path, encoding="utf-8").read()
+        if "Faz deploy para producao sem downtime" not in content:
+            return "FAIL:prompt_missing_typed_description"
+        if "compx" not in content:
+            return "FAIL:prompt_missing_agent_name"
         return "OK"
     finally:
-        s.limpar()
+        s.cleanup()
 
 
 def case_add_cancel(home):
     """'a' com nome em branco: imprime 'cancelado' e NÃO cria agente nenhum."""
-    s = Sessao(home)
+    s = Session(home)
     try:
-        if s.enviar(b"a", markers=(PROMPT_NOME,)) != PROMPT_NOME:
-            return "FAIL:prompt_nome_nao_abriu"
+        if s.send(b"a", markers=(PROMPT_NAME,)) != PROMPT_NAME:
+            return "FAIL:name_prompt_did_not_open"
         # Enter sozinho = nome vazio. _st_add trata como cancelar, imprime
         # 'cancelado', dorme 1s e só ENTÃO redesenha — RENDER_MARK atravessa
         # esse sono sem depender de um limiar de tempo calibrado à mão.
-        if s.enviar(b"\n", markers=(RENDER_MARK,), deadline=10.0) != RENDER_MARK:
-            return "FAIL:nao_voltou_ao_menu"
-        if MARK_CANCELADO not in s.saida:
-            return "FAIL:nao_imprimiu_cancelado"
-        s.fechar(b"q")
+        if s.send(b"\n", markers=(RENDER_MARK,), deadline=10.0) != RENDER_MARK:
+            return "FAIL:did_not_return_to_menu"
+        if MARK_CANCELLED not in s.output:
+            return "FAIL:did_not_print_cancelled"
+        s.close(b"q")
         tf = s.team_file()
         if not tf or not os.path.isfile(tf):
-            return "FAIL:sem_team_file"
+            return "FAIL:no_team_file"
         if _agent_names(tf) != EXPECTED_AGENTS:
-            return "FAIL:time_alterado:%s" % ",".join(_agent_names(tf))
+            return "FAIL:team_changed:%s" % ",".join(_agent_names(tf))
         return "OK"
     finally:
-        s.limpar()
+        s.cleanup()
 
 
-def case_del_sem_confirmacao(home):
-    """'d' na linha do coder: remove IMEDIATAMENTE — sem confirmação (achado,
-    ver o comentário do módulo). O teste verifica o comportamento REAL."""
-    s = Sessao(home)
+def _delete_with_response(home, response):
+    """Sobe uma sessão própria, aperta 'd' na linha do coder e responde a
+    confirmação com 'response' (bytes). Devolve os nomes de agentes que
+    sobraram no team.json ao final, ou uma string 'FAIL:...'."""
+    s = Session(home)
     try:
-        if s.enviar(b"\x1b[B") != RENDER_MARK:            # líder -> coder
-            return "FAIL:nao_desceu_para_coder"
-        antes = len(s.saida)
-        if s.enviar(b"d") != RENDER_MARK:                 # remove e redesenha
-            return "FAIL:nao_redesenhou_apos_d"
-        pedaco = s.saida[antes:]
-        # nenhum prompt de confirmação apareceu no meio do caminho — se
-        # existisse, teria enviado uma pergunta ANTES do redesenho.
-        if b"[s/N]" in pedaco:
-            return "FAIL:apareceu_confirmacao_onde_nao_deveria(codigo_mudou?)"
-        s.fechar(b"q")
+        if s.send(b"\x1b[B") != RENDER_MARK:                # líder -> coder
+            return "FAIL:did_not_move_down_to_coder"
+        before = len(s.output)
+        if s.send(b"d", markers=(MARK_CONFIRM,)) != MARK_CONFIRM:
+            return "FAIL:confirmation_did_not_appear"
+        question = s.output[before:]
+        if b"coder" not in question:
+            return "FAIL:question_missing_agent_name"
+        if s.send(response, markers=(RENDER_MARK,), deadline=10.0) != RENDER_MARK:
+            return "FAIL:did_not_return_to_menu_after_response"
+        s.close(b"q")
         tf = s.team_file()
         if not tf or not os.path.isfile(tf):
-            return "FAIL:sem_team_file"
-        nomes = _agent_names(tf)
-        if nomes != ["reviewer"]:
-            return "FAIL:coder_nao_sumiu:%s" % ",".join(nomes)
-        return "OK"
+            return "FAIL:no_team_file"
+        return _agent_names(tf)
     finally:
-        s.limpar()
+        s.cleanup()
 
 
-def case_space_nao_persiste_no_quit(home):
+def case_delete_with_confirmation(home):
+    """'d' na linha do coder pede confirmação — nome do agente visível na
+    pergunta, default NÃO (lib/menu.sh menu_confirm). 'n' e Enter sozinho
+    preservam o time; só 's' remove (OAV2-27). Substitui o antigo
+    'del_sem_confirmacao': a remoção deixou de ser imediata."""
+    for response, expected, label in (
+        (b"n\n", EXPECTED_AGENTS, "n_does_not_remove"),
+        (b"\n", EXPECTED_AGENTS, "enter_alone_does_not_remove"),  # default NÃO
+        (b"s\n", ["reviewer"], "s_removes"),
+    ):
+        names = _delete_with_response(home, response)
+        if isinstance(names, str):
+            return "FAIL:%s:%s" % (label, names)
+        if names != expected:
+            return "FAIL:%s:%s" % (label, ",".join(names))
+    return "OK"
+
+
+def case_space_does_not_persist_on_quit(home):
     """Espaço troca a IA da linha em memória; saindo com 'q' (cancelamento),
     a troca é DESCARTADA — team.json continua com o backend original."""
-    s = Sessao(home)
+    s = Session(home)
     try:
-        if s.enviar(b"\x1b[B") != RENDER_MARK:             # líder -> coder
-            return "FAIL:nao_desceu_para_coder"
-        if s.enviar(b" ") != RENDER_MARK:                  # cicla a IA
-            return "FAIL:nao_redesenhou_apos_espaco"
-        s.fechar(b"q")
+        if s.send(b"\x1b[B") != RENDER_MARK:               # líder -> coder
+            return "FAIL:did_not_move_down_to_coder"
+        if s.send(b" ") != RENDER_MARK:                    # cicla a IA
+            return "FAIL:did_not_redraw_after_space"
+        s.close(b"q")
         if s.rc() != "2":
-            return "FAIL:rc_deveria_ser_2_ao_sair_por_q:%s" % s.rc()
+            return "FAIL:rc_should_be_2_when_quitting_with_q:%s" % s.rc()
         tf = s.team_file()
         if not tf or not os.path.isfile(tf):
-            return "FAIL:sem_team_file"
+            return "FAIL:no_team_file"
         a = _agent(tf, "coder")
         if a is None or a.get("backend") != "opencode":
-            return "FAIL:backend_coder_mudou_sem_persistir:%s" % (a or {}).get("backend")
+            return "FAIL:coder_backend_changed_without_persisting:%s" % (a or {}).get("backend")
         return "OK"
     finally:
-        s.limpar()
+        s.cleanup()
 
 
-def case_enter_persiste(home):
+def case_enter_persists(home):
     """Espaço troca a IA, Enter NA LINHA (não em 'adicionar'/'sair') sai do
     laço sem cancelar e persiste via team_replace — team.json reflete a
     troca, e select_team devolve rc 0 (não 2)."""
-    s = Sessao(home)
+    s = Session(home)
     try:
-        if s.enviar(b"\x1b[B") != RENDER_MARK:             # líder -> coder
-            return "FAIL:nao_desceu_para_coder"
-        if s.enviar(b" ") != RENDER_MARK:                  # opencode -> codex
-            return "FAIL:nao_redesenhou_apos_espaco"
-        s.enviar(b"\r", markers=(b"TEAM_FILE=",), deadline=8.0)
-        s.fechar(extra=b"")
+        if s.send(b"\x1b[B") != RENDER_MARK:               # líder -> coder
+            return "FAIL:did_not_move_down_to_coder"
+        if s.send(b" ") != RENDER_MARK:                    # opencode -> codex
+            return "FAIL:did_not_redraw_after_space"
+        s.send(b"\r", markers=(b"TEAM_FILE=",), deadline=8.0)
+        s.close(extra=b"")
         if s.rc() != "0":
-            return "FAIL:rc_deveria_ser_0_ao_sair_por_enter:%s" % s.rc()
+            return "FAIL:rc_should_be_0_when_exiting_with_enter:%s" % s.rc()
         tf = s.team_file()
         if not tf or not os.path.isfile(tf):
-            return "FAIL:sem_team_file"
+            return "FAIL:no_team_file"
         a = _agent(tf, "coder")
         if a is None or a.get("backend") != "codex":
-            return "FAIL:backend_coder_nao_persistiu:%s" % (a or {}).get("backend")
+            return "FAIL:coder_backend_did_not_persist:%s" % (a or {}).get("backend")
         return "OK"
     finally:
-        s.limpar()
+        s.cleanup()
 
 
 CASES = [
     ("add_full", case_add_full),
     ("add_cancel", case_add_cancel),
-    ("del_sem_confirmacao", case_del_sem_confirmacao),
-    ("space_nao_persiste_no_quit", case_space_nao_persiste_no_quit),
-    ("enter_persiste", case_enter_persiste),
+    ("delete_with_confirmation", case_delete_with_confirmation),
+    ("space_does_not_persist_on_quit", case_space_does_not_persist_on_quit),
+    ("enter_persists", case_enter_persists),
 ]
 
 
 def main():
     home = sys.argv[1]
-    for nome, fn in CASES:
+    for name, fn in CASES:
         try:
-            resultado = fn(home)
+            result = fn(home)
         except Exception as exc:  # nunca deixar o roteiro morrer calado
-            resultado = "FAIL:excecao:%s" % exc
-        print("CASE:%s=%s" % (nome, resultado))
-    print("SESSAO_VIVA")
+            result = "FAIL:exception:%s" % exc
+        print("CASE:%s=%s" % (name, result))
+    print("SESSION_ALIVE")
 
 
 if __name__ == "__main__":
