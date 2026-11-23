@@ -1,78 +1,78 @@
-# Contribuindo com o Orchestra Agents
+# Contributing to Orchestra Agents
 
-Obrigado pelo interesse em contribuir! 🎼 Issues e pull requests são bem-vindos.
+Thanks for your interest in contributing! 🎼 Issues and pull requests are welcome.
 
-## 🧰 Pré-requisitos
+## 🧰 Prerequisites
 
-- Ao menos um backend de agente — **Claude Code**, **OpenCode** ou **Codex** (veja os
-  [pré-requisitos](README.md#-pré-requisitos)). Para rodar os testes, nenhum é necessário.
-- **zellij**, `git`, `python3` (e `curl` para rodar o instalador)
-- `bash` (os scripts usam `#!/usr/bin/env bash`)
+- At least one agent backend — **Claude Code**, **OpenCode** or **Codex** (see the
+  [prerequisites](README.md#-prerequisites)). To run the tests, none is required.
+- **zellij**, `git`, `python3` (and `curl` to run the installer)
+- `bash` (the scripts use `#!/usr/bin/env bash`)
 
-## 🛠️ Setup de desenvolvimento
+## 🛠️ Development setup
 
 ```bash
-# 1) faça um fork e clone o seu fork
-git clone git@github.com:SEU_USUARIO/orchestra-agents.git
+# 1) fork and clone your fork
+git clone git@github.com:YOUR_USERNAME/orchestra-agents.git
 cd orchestra-agents
 
-# 2) instale a partir da cópia local (sem baixar do GitHub)
+# 2) install from the local copy (without downloading from GitHub)
 ORCHESTRA_LOCAL_SRC="$PWD" bash install.sh
 ```
 
-Para iterar, edite os arquivos no repositório e rode `ORCHESTRA_LOCAL_SRC="$PWD" bash install.sh` de novo para sincronizar a instalação em `~/.orchestra-agents`. O modo dev copia o working tree inteiro (menos `.git`, `.orchestra` e caches) e **recria** o diretório de instalação, então arquivos removidos no repositório somem da instalação também.
+To iterate, edit the files in the repository and run `ORCHESTRA_LOCAL_SRC="$PWD" bash install.sh` again to sync the installation in `~/.orchestra-agents`. Dev mode copies the whole working tree (except `.git`, `.orchestra` and caches) and **recreates** the installation directory, so files removed from the repository disappear from the installation too.
 
-Depois de sincronizar, lembre que **painéis já abertos seguem com o código antigo**: encerre com `orchestra down` e suba de novo para testar as mudanças.
+After syncing, remember that **panes that are already open keep running the old code**: shut down with `orchestra down` and bring the team up again to test your changes.
 
-## ✅ Rodando os testes
+## ✅ Running the tests
 
-Sempre rode o smoke test antes de abrir um PR:
+Always run the smoke test before opening a PR:
 
 ```bash
 ./tests/smoke.sh
 ```
 
-Ele cobre sintaxe (`bash -n`), o modelo do time, composição por env, `add`/`rm`, prompts de papel, o ciclo completo `send → done → await`, exit codes, o layout gerado e o `doctor`. Roda com `ORCHESTRA_MUX=stub` num projeto temporário — não precisa de zellij nem de backend autenticado, e não encosta numa sessão real. O CI (GitHub Actions) roda automaticamente a cada push/PR na `main`.
+It covers syntax (`bash -n`), the team model, composition via env, `add`/`rm`, role prompts, the full `send → done → await` cycle, exit codes, the generated layout and `doctor`. It runs with `ORCHESTRA_MUX=stub` in a temporary project — it needs neither zellij nor an authenticated backend, and it never touches a real session. CI (GitHub Actions) runs automatically on every push/PR to `main`.
 
-## 🎨 Estilo de código
+## 🎨 Code style
 
-- Todo script começa com `#!/usr/bin/env bash`.
-- Garanta que passa em `bash -n` e, de preferência, em `shellcheck -S warning`.
-- Use aspas em variáveis (`"$var"`), prefira `[ ... ]`/`case`, e funções pequenas e nomeadas.
-- Mantenha a mesma densidade de comentários e idioma das mensagens já existentes (mensagens ao usuário em PT-BR).
-- Não introduza dependências além de `bash`, `python3`, `git` e as ferramentas já usadas (`zellij`, `claude`, `opencode`, `codex`).
-- Todo acesso ao multiplexador passa por `lib/mux.sh` — não chame `zellij` direto em outro arquivo.
-- Todo menu usa o motor de `lib/menu.sh` (`menu_read_key`, `menu_draw_begin`/`menu_draw_end`, `menu_begin`/`menu_end`) — não escreva leitura de tecla nem redesenho de tela em outro arquivo. O smoke reprova o build se você duplicar isso; os dois bugs que a regra evita são invisíveis em bash 5 e fora de um terminal de verdade.
+- Every script starts with `#!/usr/bin/env bash`.
+- Make sure it passes `bash -n` and, preferably, `shellcheck -S warning`.
+- Quote variables (`"$var"`), prefer `[ ... ]`/`case`, and keep functions small and well named.
+- Keep the same comment density and language as the existing messages (user-facing messages in PT-BR).
+- Do not introduce dependencies beyond `bash`, `python3`, `git` and the tools already in use (`zellij`, `claude`, `opencode`, `codex`).
+- All multiplexer access goes through `lib/mux.sh` — do not call `zellij` directly from any other file.
+- Every menu uses the engine in `lib/menu.sh` (`menu_read_key`, `menu_draw_begin`/`menu_draw_end`, `menu_begin`/`menu_end`) — do not write key reading or screen redrawing in any other file. The smoke test fails the build if you duplicate it; the two bugs this rule prevents are invisible in bash 5 and outside a real terminal.
 
-## 📝 Mensagens de commit
+## 📝 Commit messages
 
-As mensagens são **em inglês** e adotam, **como referência de convenção**, o guia **[Padrões de Commits (iuricode)](https://github.com/iuricode/padroes-de-commits)**: `<emoji> <tipo>: <descrição no imperativo>`. (É só uma referência externa de padronização — não há vínculo com o projeto.)
+Messages are **in English** and adopt, **as a convention reference**, the **[Padrões de Commits (iuricode)](https://github.com/iuricode/padroes-de-commits)** guide: `<emoji> <type>: <description in the imperative>`. (It is just an external reference for standardization — there is no tie to the project.)
 
-Exemplos:
+Examples:
 
-| Tipo | Quando | Exemplo |
-|------|--------|---------|
-| ✨ `feat` | nova funcionalidade | `✨ feat: add 'orchestra logs' command` |
-| 🐛 `fix` | correção de bug | `🐛 fix: handle empty project directory` |
-| 📝 `docs` | documentação | `📝 docs: clarify model configuration` |
-| ✅ `test` | testes | `✅ test: cover dispatch error path` |
-| ♻️ `refactor` | refatoração | `♻️ refactor: extract session helpers` |
-| 🔧 `chore` | tarefas/config | `🔧 chore: tidy install paths` |
+| Type | When | Example |
+|------|------|---------|
+| ✨ `feat` | new feature | `✨ feat: add 'orchestra logs' command` |
+| 🐛 `fix` | bug fix | `🐛 fix: handle empty project directory` |
+| 📝 `docs` | documentation | `📝 docs: clarify model configuration` |
+| ✅ `test` | tests | `✅ test: cover dispatch error path` |
+| ♻️ `refactor` | refactoring | `♻️ refactor: extract session helpers` |
+| 🔧 `chore` | tasks/config | `🔧 chore: tidy install paths` |
 | 👷 `ci` | CI/CD | `👷 ci: cache shellcheck install` |
-| 🔖 `chore` | bump de versão | `🔖 chore: bump version to v0.2.0` |
+| 🔖 `chore` | version bump | `🔖 chore: bump version to v0.2.0` |
 
-## 🔀 Abrindo um Pull Request
+## 🔀 Opening a Pull Request
 
-1. Crie uma branch a partir da `main`: `git checkout -b minha-feature`
-2. Faça suas mudanças e rode `./tests/smoke.sh` (deve passar).
-3. Faça commits no padrão acima.
-4. Abra o PR contra a `main` descrevendo **o quê** e **por quê**.
-5. Garanta que o CI esteja verde.
+1. Create a branch from `main`: `git checkout -b my-feature`
+2. Make your changes and run `./tests/smoke.sh` (it must pass).
+3. Commit following the convention above.
+4. Open the PR against `main`, describing **what** and **why**.
+5. Make sure CI is green.
 
-## 🚢 Lançando uma versão
+## 🚢 Releasing a version
 
-Mantenedores: o processo de release está documentado no [README](README.md#-processo-de-release).
+Maintainers: the release process is documented in the [README](README.md#-release-process).
 
 ---
 
-Dúvidas? Abra uma [issue](https://github.com/orcioly/orchestra-agents/issues). 🙌
+Questions? Open an [issue](https://github.com/orcioly/orchestra-agents/issues). 🙌
