@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Orchestra Agents — modelo do TIME (líder + N agentes), por projeto.
+# Orchestra Agents — TEAM model (leader + N agents), per project.
 #
-# O time vive em $ORCHESTRA_STATE/projects/<slug>/team.json, FORA do projeto do
-# usuário. Cada agente tem:
-#   name    — identificador usado em 'orchestra send <name>'
+# The team lives in $ORCHESTRA_STATE/projects/<slug>/team.json, OUTSIDE the user's
+# project. Each agent has:
+#   name    — identifier used in 'orchestra send <name>'
 #   backend — claude | opencode | codex
-#   role    — preset (coder, reviewer, tester, docs, architect, devops) ou 'custom'
-#   prompt_file — só p/ role=custom: caminho relativo a $ORCHESTRA_DIR
+#   role    — preset (coder, reviewer, tester, docs, architect, devops) or 'custom'
+#   prompt_file — only for role=custom: path relative to $ORCHESTRA_DIR
 #
-# Não executar diretamente; é "sourced" pelo lib/core.sh.
+# Do not execute directly; it is sourced by lib/core.sh.
 
 ORCHESTRA_BACKENDS="claude opencode codex"
 ORCHESTRA_ROLES="coder reviewer tester docs architect devops"
 
-# ícone + descrição curta de cada papel (usados no menu, no layout e no roster do líder)
+# icon + short description of each role (used in the menu, in the layout and in the leader's roster)
 role_icon() {
   case "$1" in
     leader)    echo "🎼" ;; coder)  echo "🔧" ;; reviewer)  echo "🔍" ;;
@@ -34,20 +34,20 @@ role_desc() {
   esac
 }
 
-# Rótulo PADRONIZADO do painel de um agente: ícone do papel + NOME EM MAIÚSCULAS.
-# Fonte única — usada pelo layout gerado, pelos painéis criados em runtime e pelo
-# menu, para que um agente criado na hora fique igual aos que vieram do layout.
-pane_label() { # $1 agente
+# STANDARDIZED pane label of an agent: role icon + NAME IN UPPERCASE.
+# Single source — used by the generated layout, by panes created at runtime and by the
+# menu, so that an agent created on the spot looks the same as those that came from the layout.
+pane_label() { # $1 agent
   local r
   if [ "$1" = leader ]; then printf '%s LÍDER' "$(role_icon leader)"; return 0; fi
   r="$(team_field "$1" role)"
   printf '%s %s' "$(role_icon "$r")" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
 }
 
-# Descrição curta da FUNÇÃO de um agente, para o usuário entender o time de relance.
-# Papéis prontos usam role_desc; agentes custom mostram a 1ª linha do prompt que o
-# usuário escreveu — é o que ele reconhece, muito melhor que "agente customizado".
-role_summary() { # $1 agente
+# Short description of an agent's ROLE, so the user understands the team at a glance.
+# Ready-made roles use role_desc; custom agents show the 1st line of the prompt the
+# user wrote — that is what they recognize, much better than "agente customizado".
+role_summary() { # $1 agent
   local r pf f line=""
   if [ "$1" = leader ]; then role_desc leader; return 0; fi
   r="$(team_field "$1" role)"
@@ -64,10 +64,10 @@ role_summary() { # $1 agente
 team_file()    { echo "$ORCHESTRA_DIR/team.json"; }
 team_prompts() { echo "$ORCHESTRA_DIR/prompts"; }
 
-# Caminho absoluto de um prompt_file. O campo é RELATIVO a $ORCHESTRA_DIR
-# ("prompts/<nome>.md"). Times gravados antes da mudança guardavam
-# ".orchestra/prompts/<nome>.md" (relativo ao projeto); a migração move o arquivo,
-# então basta descartar o prefixo antigo em vez de reescrever o team.json.
+# Absolute path of a prompt_file. The field is RELATIVE to $ORCHESTRA_DIR
+# ("prompts/<name>.md"). Teams saved before the change stored
+# ".orchestra/prompts/<name>.md" (relative to the project); the migration moves the file,
+# so it is enough to drop the old prefix instead of rewriting team.json.
 team_prompt_path() { # $1 prompt_file
   local pf="${1:-}"
   [ -n "$pf" ] || return 1
@@ -78,8 +78,8 @@ team_prompt_path() { # $1 prompt_file
   esac
 }
 
-# roda um trecho python com o team.json no stdin e o caminho no argv[1]
-_team_py() { # $1 script python  $@ args extras
+# runs a python snippet with team.json on stdin and the path in argv[1]
+_team_py() { # $1 python script  $@ extra args
   local script="$1"; shift
   python3 -c "$script" "$(team_file)" "$@" 2>/dev/null
 }
@@ -108,7 +108,7 @@ def find(name):
     return None
 '
 
-# cria o time padrão se ainda não existir (líder claude + coder + reviewer)
+# creates the default team if it does not exist yet (leader claude + coder + reviewer)
 team_ensure() {
   [ -f "$(team_file)" ] && { _orchestra_stamp_project 2>/dev/null; return 0; }
   mkdir -p "$ORCHESTRA_DIR"
@@ -125,7 +125,7 @@ team_ensure() {
 JSON
 }
 
-# nomes dos agentes (workers), um por linha, na ordem do arquivo
+# agent names (workers), one per line, in file order
 team_names() {
   _team_py "$_TEAM_LOAD"'
 for a in team["agents"]:
@@ -133,7 +133,7 @@ for a in team["agents"]:
 '
 }
 
-# nomes incluindo o líder (primeiro)
+# names including the leader (first)
 team_all_names() {
   _team_py "$_TEAM_LOAD"'
 print(team["leader"].get("name","leader"))
@@ -142,20 +142,20 @@ for a in team["agents"]:
 '
 }
 
-team_exists() { # $1 nome
+team_exists() { # $1 name
   [ -n "${1:-}" ] || return 1
   team_all_names | grep -qx -- "$1"
 }
 
-# lê um campo de um agente (backend|role|prompt_file|name)
-team_field() { # $1 nome  $2 campo
+# reads a field of an agent (backend|role|prompt_file|name)
+team_field() { # $1 name  $2 field
   _team_py "$_TEAM_LOAD"'
 a = find(sys.argv[2])
 print((a or {}).get(sys.argv[3], "") or "")
 ' "$1" "$2"
 }
 
-team_set() { # $1 nome  $2 campo  $3 valor
+team_set() { # $1 name  $2 field  $3 value
   _team_py "$_TEAM_LOAD"'
 a = find(sys.argv[2])
 if a is None:
@@ -165,7 +165,7 @@ save()
 ' "$1" "$2" "$3"
 }
 
-team_add() { # $1 nome  $2 backend  $3 role  [$4 prompt_file]
+team_add() { # $1 name  $2 backend  $3 role  [$4 prompt_file]
   _team_py "$_TEAM_LOAD"'
 name, backend, role = sys.argv[2], sys.argv[3], sys.argv[4]
 pf = sys.argv[5] if len(sys.argv) > 5 else ""
@@ -179,7 +179,7 @@ save()
 ' "$1" "$2" "$3" "${4:-}"
 }
 
-team_rm() { # $1 nome
+team_rm() { # $1 name
   _team_py "$_TEAM_LOAD"'
 name = sys.argv[2]
 before = len(team["agents"])
@@ -190,7 +190,7 @@ save()
 ' "$1"
 }
 
-# substitui a lista inteira a partir de "nome=backend:role" separados por espaço
+# replaces the whole list from "name=backend:role" specs separated by spaces
 team_replace() { # $@ specs
   _team_py "$_TEAM_LOAD"'
 specs = sys.argv[2:]
@@ -211,20 +211,20 @@ save()
 ' "$@"
 }
 
-# valida um nome de agente (slug seguro p/ nome de arquivo e argumento de shell)
-team_valid_name() { # $1 nome
+# validates an agent name (slug safe for a file name and a shell argument)
+team_valid_name() { # $1 name
   [[ "${1:-}" =~ ^[a-z][a-z0-9_-]{0,23}$ ]] || return 1
-  case "$1" in leader) return 1 ;; esac   # reservado
+  case "$1" in leader) return 1 ;; esac   # reserved
 }
 
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
-# protocolo de resposta — comum a TODOS os workers, qualquer backend.
-# É o que fecha o ciclo: o líder despacha injetando texto no painel e recebe a
-# resposta quando o worker executa 'orchestra done'.
-team_worker_protocol() { # $1 nome
+# response protocol — common to ALL workers, any backend.
+# It is what closes the cycle: the leader dispatches by injecting text into the pane and receives the
+# reply when the worker runs 'orchestra done'.
+team_worker_protocol() { # $1 name
   cat <<EOF
 
 ## Limites (obrigatório)
@@ -268,9 +268,9 @@ a tarefa expira por timeout. Mensagens digitadas pelo usuário direto no seu pai
 EOF
 }
 
-# texto de instruções de um agente: preset em agents/roles/<role>.md, ou o
-# prompt_file do projeto quando role=custom. Sempre acrescido do protocolo.
-team_prompt_for() { # $1 nome
+# an agent's instruction text: preset in agents/roles/<role>.md, or the
+# project's prompt_file when role=custom. Always followed by the protocol.
+team_prompt_for() { # $1 name
   local name="$1" role pf f
   role="$(team_field "$name" role)"
   pf="$(team_field "$name" prompt_file)"
@@ -284,21 +284,21 @@ team_prompt_for() { # $1 nome
   team_worker_protocol "$name"
 }
 
-# roster legível do time — anexado ao prompt do líder para que ele conheça os
-# agentes que existem DE VERDADE (e não uma lista hardcoded).
+# human-readable team roster — appended to the leader's prompt so it knows the
+# agents that REALLY exist (and not a hardcoded list).
 team_roster() {
   local n b r
   while IFS= read -r n; do
     [ -n "$n" ] || continue
     b="$(team_field "$n" backend)"; r="$(team_field "$n" role)"
-    # role_summary (e NÃO role_desc): para agentes custom, role_desc devolve só
-    # "agente customizado" e o líder fica sem saber quando usar aquele agente.
+    # role_summary (and NOT role_desc): for custom agents, role_desc returns only
+    # "agente customizado" and the leader is left not knowing when to use that agent.
     printf -- '- %s %s (%s) — %s\n' "$(role_icon "$r")" \
       "$(printf '%s' "$n" | tr '[:lower:]' '[:upper:]')" "$b" "$(role_summary "$n")"
   done < <(team_names)
 }
 
-# prompt completo do líder = base + roster real do time
+# complete leader prompt = base + the team's real roster
 team_leader_prompt() {
   local base="$ORCHESTRA_HOME/agents/leader-prompt.md"
   [ -f "$base" ] && cat "$base"

@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Remove do config do OpenCode o agente 'reviewer' que o Orchestra adicionou.
+"""Removes from the OpenCode config the 'reviewer' agent that Orchestra added.
 
-Uso: remove_reviewer.py <opencode.jsonc>
+Usage: remove_reviewer.py <opencode.jsonc>
 
-Contrapartida do merge_reviewer.py, para que 'orchestra uninstall' devolva a
-máquina ao estado anterior. Só é chamado quando o merge registrou que FOI ELE
-quem inseriu o agente ($ORCHESTRA_STATE/opencode.reviewer.ours) — um reviewer
-que já era do usuário nunca chega aqui.
+Counterpart of merge_reviewer.py, so that 'orchestra uninstall' returns the
+machine to its previous state. Only called when the merge recorded that IT was
+the one that inserted the agent ($ORCHESTRA_STATE/opencode.reviewer.ours): a
+reviewer that already belonged to the user never gets here.
 
-Conservador de propósito: reescreve o arquivo apenas quando ele é JSON puro
-(sem comentários). Com JSONC comentado a remoção cirúrgica poderia estragar a
-formatação e os comentários do usuário, então preferimos não tocar e devolver 3,
-que faz o chamador imprimir a instrução manual.
+Conservative on purpose: rewrites the file only when it is plain JSON
+(no comments). With a commented JSONC, a surgical removal could ruin the
+user's formatting and comments, so we prefer not to touch it and return 3,
+which makes the caller print the manual instruction.
 
 Exit codes:
-  0  reviewer removido
-  10 não havia reviewer (nada a fazer)
-  3  config tem comentários/JSONC — não mexemos, o chamador orienta à mão
-  2  config ilegível
-  1  erro de uso
+  0  reviewer removed
+  10 there was no reviewer (nothing to do)
+  3  config has comments/JSONC: we do not touch it, the caller guides the manual edit
+  2  unreadable config
+  1  usage error
 """
 import json
 import os
@@ -49,12 +49,12 @@ def main():
     if not isinstance(agent, dict) or 'reviewer' not in agent:
         return 10
 
-    # o arquivo tem comentários/vírgulas finais? então não é nosso para reescrever
+    # does the file have comments/trailing commas? then it is not ours to rewrite
     if strip_jsonc(raw).strip() != raw.strip():
         return 3
 
     del agent['reviewer']
-    # bloco 'agent' vazio some junto: era só o que o Orchestra tinha posto lá
+    # an empty 'agent' block goes away too: it only held what Orchestra had put there
     if not agent:
         del cfg['agent']
 

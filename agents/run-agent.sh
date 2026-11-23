@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Orchestra Agents — launcher + SUPERVISOR de um agente (worker ou líder).
+# Orchestra Agents — launcher + SUPERVISOR of an agent (worker or leader).
 #
-# Roda a TUI LOCAL do backend escolhido para o agente e a mantém viva: se a TUI
-# morrer (crash, /exit, Ctrl-D, queda no resize), re-lança automaticamente
-# RETOMANDO a sessão anterior — o usuário nunca precisa de "Ctrl-C + Enter".
+# Runs the LOCAL TUI of the backend chosen for the agent and keeps it alive: if the TUI
+# dies (crash, /exit, Ctrl-D, drop on resize), it relaunches automatically
+# RESUMING the previous session — the user never needs "Ctrl-C + Enter".
 #
-# uso: run-agent.sh <nome-do-agente>
+# usage: run-agent.sh <agent-name>
 ORCHESTRA_HOME="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
 export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
 # shellcheck source=/dev/null
@@ -22,7 +22,7 @@ if ! team_exists "$AGENT"; then
   exec bash
 fi
 
-# registra/re-resolve o próprio pane-id (o painel se identifica pelo COMANDO)
+# registers/re-resolves its own pane-id (the pane identifies itself by its COMMAND)
 mux_pane_id "$AGENT" >/dev/null 2>&1 || true
 
 BACKEND="$(team_field "$AGENT" backend)"
@@ -54,16 +54,16 @@ banner() {
 }
 
 # ---------------------------------------------------------------------------
-# Codex: descobrir e "reivindicar" a sessão deste painel.
+# Codex: discover and "claim" this pane's session.
 #
-# 'codex resume --last' filtra por cwd, então com DOIS agentes codex no mesmo
-# projeto ele pode retomar a sessão do agente errado. Por isso reivindicamos o
-# rollout: após subir, procuramos a sessão nova daquele cwd que ainda não foi
-# reivindicada por outro agente e guardamos o id.
+# 'codex resume --last' filters by cwd, so with TWO codex agents in the same
+# project it may resume the wrong agent's session. That is why we claim the
+# rollout: after startup, we look for the new session of that cwd that has not yet been
+# claimed by another agent and store its id.
 # ---------------------------------------------------------------------------
 _codex_session_file() { echo "$ORCHESTRA_RUN_DIR/$AGENT.codex.session"; }
 
-_codex_claim_session() { # $1 epoch mínimo
+_codex_claim_session() { # $1 minimum epoch
   local since="$1" claimed=() f id
   for f in "$ORCHESTRA_RUN_DIR"/*.codex.session; do
     [ -f "$f" ] || continue
@@ -96,7 +96,7 @@ if best:
 PY
 }
 
-# roda em background: espera o rollout aparecer (o codex só grava após o 1º turno)
+# runs in the background: waits for the rollout to appear (codex only writes it after the 1st turn)
 _codex_claim_bg() {
   local since="$1" i
   ( for i in $(seq 1 40); do
@@ -107,7 +107,7 @@ _codex_claim_bg() {
 }
 
 # ---------------------------------------------------------------------------
-# Lançamento por backend. $1 = "first" na primeira subida, "resume" nas demais.
+# Launch per backend. $1 = "first" on the first start, "resume" on the others.
 # ---------------------------------------------------------------------------
 launch() { # $1 first|resume
   local mode="$1"
@@ -122,13 +122,13 @@ launch() { # $1 first|resume
 launch_claude() {
   local args=(--append-system-prompt "$PROMPT")
   if [ "$ROLE" = leader ]; then
-    # O líder ORQUESTRA: quem edita código é o coder. Bloquear as ferramentas de
-    # escrita é o que impede, de fato, o líder de sair alterando o projeto do
-    # usuário (ou a instalação do Orchestra) em vez de delegar — regra em prompt
-    # é orientação, isto é impedimento.
+    # The leader ORCHESTRATES: the coder is who edits code. Blocking the write
+    # tools is what actually stops the leader from going off modifying the user's
+    # project (or the Orchestra installation) instead of delegating — a rule in a prompt
+    # is guidance, this is prevention.
     args+=(--disallowedTools Edit Write NotebookEdit)
   else
-    # permite ao worker fechar o ciclo sem prompt de permissão
+    # lets the worker close the cycle without a permission prompt
     args+=(--allowedTools "Bash(orchestra done:*)")
   fi
   [ -n "$ORCHESTRA_MODEL_CLAUDE" ] && args+=(--model "$ORCHESTRA_MODEL_CLAUDE")
@@ -139,20 +139,20 @@ launch_claude() {
 launch_opencode() {
   local args=()
   [ -n "$ORCHESTRA_MODEL" ] && args+=(-m "$ORCHESTRA_MODEL")
-  # Quando existe um agente homônimo na config do OpenCode, usamos ele — traz as
-  # restrições de ferramenta do papel (ex.: reviewer sem write/edit).
+  # When an agent with the same name exists in the OpenCode config, we use it — it brings the
+  # role's tool restrictions (e.g. reviewer without write/edit).
   _opencode_has_agent "$ROLE" && args+=(--agent "$ROLE")
-  # O prompt de papel é enviado SEMPRE: o agente da config do OpenCode tem prompt
-  # próprio, que NÃO inclui o protocolo do Orchestra. Sem isto o worker responde
-  # na TUI mas nunca executa 'orchestra done', e todo despacho morre em timeout.
+  # The role prompt is ALWAYS sent: the OpenCode config agent has its own prompt,
+  # which does NOT include the Orchestra protocol. Without this the worker answers
+  # in the TUI but never runs 'orchestra done', and every dispatch dies on timeout.
   if [ "$1" = resume ]; then args+=(--continue); else args+=(--prompt "$PROMPT" "$PROJ"); fi
   "$OPENCODE" "${args[@]}"
 }
 
 launch_codex() {
   local sid args=(-C "$PROJ" -a never -s "$(codex_sandbox_for "$ROLE")" --no-alt-screen)
-  # o runtime do Orchestra mora fora do projeto: sem abri-lo no sandbox o worker
-  # não consegue gravar a resposta do 'orchestra done'
+  # Orchestra's runtime lives outside the project: without opening it in the sandbox the worker
+  # cannot write the 'orchestra done' reply
   local wr; wr="$(codex_writable_roots_arg)"
   [ -n "$wr" ] && args+=(-c "$wr")
   [ -n "$ORCHESTRA_CODEX_MODEL" ] && args+=(-m "$ORCHESTRA_CODEX_MODEL")
@@ -166,7 +166,7 @@ launch_codex() {
 }
 
 # ---------------------------------------------------------------------------
-# Supervisor: mantém a TUI viva.
+# Supervisor: keeps the TUI alive.
 # ---------------------------------------------------------------------------
 mode=first
 fast_failures=0
@@ -177,7 +177,7 @@ while true; do
   rc=$?
   elapsed=$(( $(date +%s) - start ))
 
-  # crash-loop (binário ausente, flag inválida): não fica reiniciando em vão
+  # crash-loop (missing binary, invalid flag): do not keep restarting in vain
   if [ "$elapsed" -lt 3 ]; then
     fast_failures=$((fast_failures+1))
   else
@@ -191,7 +191,7 @@ while true; do
     exec bash
   fi
 
-  # janela para o usuário sair de verdade (Ctrl-C durante a contagem)
+  # window for the user to really quit (Ctrl-C during the countdown)
   stop=0
   trap 'stop=1' INT
   echo

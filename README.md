@@ -6,203 +6,203 @@
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/orcioly/orchestra-agents/pulls)
 
-Um **orquestrador de IA** para o terminal: você monta um **time de agentes**, com um **líder
-(maestro)** e quantos workers quiser, e cada um roda como **TUI real**, lado a lado, dentro
-do **zellij**.
+An **AI orchestrator** for the terminal: you build a **team of agents**, with a **leader
+(the conductor)** and as many workers as you like, and each one runs as a **real TUI**, side
+by side, inside **zellij**.
 
-O time é **inteiramente seu**: você escolhe quantos agentes, o nome de cada um, o que cada um
-faz (um papel pronto ou uma função que você escreve) e qual IA o roda: **Claude Code**,
-**OpenCode** ou **Codex**, inclusive para o líder. Os três abaixo são só um exemplo.
+The team is **entirely yours**: you choose how many agents, the name of each one, what each
+one does (a ready-made role or a function you write) and which AI runs it: **Claude Code**,
+**OpenCode** or **Codex**, the leader included. The three below are just an example.
 
-O líder despacha tarefas de forma **assíncrona** (não bloqueia, não queima token esperando)
-e os workers trabalham em paralelo, com tudo visível ao vivo. Trocar a IA de um agente
-não muda nada no seu fluxo: os comandos são idênticos.
+The leader dispatches tasks **asynchronously** (it doesn't block, and it doesn't burn tokens
+waiting) and the workers run in parallel, with everything visible live. Swapping the AI of an
+agent changes nothing in your workflow: the commands are identical.
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│ 🎼 LÍDER                    a IA é sua escolha            │
+│ 🎼 LEADER                   your AI of choice             │
 ├──────────────┬──────────────┬──────────────┬──────────────┤
 │ 🔧 CODER     │ 🔍 REVIEWER  │ ✨ PR        │    +         │
-│ papel pronto │ papel pronto │ função sua   │ quantos você │
-│ IA à escolha │ IA à escolha │ IA à escolha │ quiser       │
+│ preset role  │ preset role  │ your role    │ as many as   │
+│ any AI       │ any AI       │ any AI       │ you want     │
 └──────────────┴──────────────┴──────────────┴──────────────┘
-   nada aqui é fixo: você define quantos agentes, o nome, a função
-   e a IA (claude, opencode ou codex) de cada um, no menu, ao subir
+   nothing here is fixed: you set how many agents, the name, the role
+   and the AI (claude, opencode or codex) of each one, in the menu, at startup
 ```
 
-Ao rodar `orchestra`, um **menu com setas** deixa você montar o time do projeto: trocar a IA
-de cada agente, adicionar e remover agentes. A composição fica salva **fora do projeto**,
-em `~/.local/state/orchestra-agents/projects/<projeto>/team.json`: o Orchestra não escreve
-nenhum arquivo na pasta do seu código.
+When you run `orchestra`, an **arrow-key menu** lets you build the project's team: switch the
+AI of each agent, add and remove agents. The composition is saved **outside the project**,
+in `~/.local/state/orchestra-agents/projects/<project>/team.json`: Orchestra writes no file
+into your code folder.
 
 ---
 
-## ✨ Como funciona
+## ✨ How it works
 
-Não há servidor, porta nem daemon. Cada agente é uma **TUI local** num painel do zellij, e o
-líder conversa com ela pelo próprio multiplexador:
+There is no server, port or daemon. Each agent is a **local TUI** in a zellij pane, and the
+leader talks to it through the multiplexer itself:
 
-1. `orchestra send coder "…"` **injeta a tarefa no painel** do coder (como uma colagem) e
-   submete. Retorna na hora, então o líder não fica parado.
-2. O worker trabalha **ao vivo**, na TUI, e você vê tudo acontecendo.
-3. Ao concluir, o worker executa `orchestra done coder <id>` devolvendo a resposta final.
-4. O líder pega o resultado com `orchestra await coder` (bloqueante e barato) ou
-   `orchestra result coder` (não-bloqueante).
+1. `orchestra send coder "…"` **injects the task into the coder's pane** (as a paste) and
+   submits it. It returns immediately, so the leader is never stuck waiting.
+2. The worker works **live**, in the TUI, and you see everything happening.
+3. When finished, the worker runs `orchestra done coder <id>`, handing back the final answer.
+4. The leader picks up the result with `orchestra await coder` (blocking and cheap) or
+   `orchestra result coder` (non-blocking).
 
-Como não existe id de sessão guardado, dar `/clear`, `/new`, mover o painel ou redimensionar
-**não quebra** o despacho. E se um painel morrer, ele é **recriado automaticamente**: cada
-painel roda sob um supervisor que reinicia a TUI retomando a conversa anterior.
+Since no session id is stored, running `/clear`, `/new`, moving the pane or resizing it
+**does not break** dispatching. And if a pane dies, it is **recreated automatically**: each
+pane runs under a supervisor that restarts the TUI, resuming the previous conversation.
 
 ---
 
-## ✅ Pré-requisitos
+## ✅ Prerequisites
 
-| Requisito | Como obter |
-|-----------|-----------|
-| **Sistema**: Linux ou macOS nativamente; Windows via WSL2 | veja [Windows (via WSL)](#windows-via-wsl) |
-| **Ao menos uma IA de agente**: Claude Code, OpenCode ou Codex | <https://docs.claude.com/claude-code> · <https://opencode.ai> · <https://developers.openai.com/codex/cli> |
-| `git`, `python3` (e `curl`, só para o instalador) | já vêm na maioria das distros |
-| **zellij** | instalado automaticamente pelo instalador |
+| Requirement | How to get it |
+|-------------|---------------|
+| **System**: Linux or macOS natively; Windows via WSL2 | see [Windows (via WSL)](#windows-via-wsl) |
+| **At least one agent AI**: Claude Code, OpenCode or Codex | <https://docs.claude.com/claude-code> · <https://opencode.ai> · <https://developers.openai.com/codex/cli> |
+| `git`, `python3` (and `curl`, for the installer only) | already shipped with most distros |
+| **zellij** | installed automatically by the installer |
 
-> Você só precisa das IAs que for **usar**. Um time inteiro de Claude Code funciona sem
-> OpenCode nem Codex instalados, e vice-versa. O `orchestra doctor` mostra o que falta.
+> You only need the AIs you are going to **use**. A whole team of Claude Code works without
+> OpenCode or Codex installed, and vice versa. `orchestra doctor` shows what is missing.
 >
-> Se usar OpenCode, o instalador configura sozinho o agente **`reviewer`** (read-only) na sua
-> config. Veja [`config/opencode.reviewer.jsonc`](config/opencode.reviewer.jsonc).
+> If you use OpenCode, the installer configures the **`reviewer`** agent (read-only) in your
+> config for you. See [`config/opencode.reviewer.jsonc`](config/opencode.reviewer.jsonc).
 
 ---
 
-## 🚀 Instalação
+## 🚀 Installation
 
-### Linux e macOS
+### Linux and macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
 ```
 
-É só isso, sem **nenhuma configuração manual**. O instalador:
-1. confere quais IAs você tem instaladas;
-2. instala o **zellij** se faltar;
-3. coloca os arquivos em `~/.orchestra-agents`;
-4. instala o comando **`orchestra`** num diretório que **já está no seu `PATH`** (o mesmo do
-   `claude`/`opencode`), então ele funciona na mesma sessão;
-5. configura o `PATH` automaticamente (zsh/bash/fish) caso necessário;
-6. registra o agente `reviewer` na config do OpenCode, se ele estiver instalado.
+That's it, with **no manual configuration**. The installer:
+1. checks which AIs you have installed;
+2. installs **zellij** if it is missing;
+3. puts the files in `~/.orchestra-agents`;
+4. installs the **`orchestra`** command in a directory that is **already on your `PATH`**
+   (the same one as `claude`/`opencode`), so it works in the same session;
+5. configures the `PATH` automatically (zsh/bash/fish) when needed;
+6. registers the `reviewer` agent in the OpenCode config, if OpenCode is installed.
 
-Depois de instalar, confira e suba:
+After installing, check and launch:
 
 ```bash
-orchestra doctor   # mostra o que está ok e o que falta (sai 0 se o essencial está certo)
-cd ~/meu-projeto
-orchestra          # precisa ser fora de uma sessão zellij
+orchestra doctor   # shows what is ok and what is missing (exits 0 if the essentials are fine)
+cd ~/my-project
+orchestra          # must be run outside a zellij session
 ```
 
-> **Rode `orchestra` a partir de um terminal normal**, não de dentro do zellij: ele recusa
-> aninhar sessões e avisa.
+> **Run `orchestra` from a regular terminal**, not from inside zellij: it refuses to nest
+> sessions and says so.
 
 ### Windows (via WSL)
 
-O Orchestra é escrito em bash e usa ferramentas Unix que o Prompt de Comando e o PowerShell
-não têm. Por isso, no Windows ele roda dentro do **WSL**, que é Linux de verdade. Na prática:
-você instala o WSL uma vez e, daí em diante, tudo funciona igual ao Linux.
+Orchestra is written in bash and uses Unix tools that Command Prompt and PowerShell do not
+have. That is why, on Windows, it runs inside **WSL**, which is real Linux. In practice:
+you install WSL once and, from then on, everything works the same as on Linux.
 
-**1. Instale o WSL primeiro.** No PowerShell, **como administrador**:
+**1. Install WSL first.** In PowerShell, **as administrator**:
 
 ```powershell
 wsl --install
 ```
 
-Reinicie o computador e abra o Ubuntu uma vez, para criar seu usuário.
+Restart the computer and open Ubuntu once, to create your user.
 
-**2. Instale as IAs dentro do WSL.** No Ubuntu, instale e autentique o `claude`, o `opencode`
-ou o `codex`. As versões instaladas no Windows **não servem**, porque os painéis são processos Linux.
+**2. Install the AIs inside WSL.** In Ubuntu, install and authenticate `claude`, `opencode`
+or `codex`. The versions installed on Windows **will not work**, because the panes are Linux processes.
 
-**3. Siga os mesmos passos do Linux**, agora dentro do Ubuntu: [instalação acima](#linux-e-macos).
+**3. Follow the same steps as on Linux**, now inside Ubuntu: [installation above](#linux-and-macos).
 
-Se preferir não entrar no WSL, dá para instalar direto do PowerShell ou do Prompt de Comando:
+If you would rather not enter WSL, you can install straight from PowerShell or Command Prompt:
 
 ```powershell
 wsl bash -lc "curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash"
 ```
 
-**Para usar depois:** `orchestra` dentro do WSL, ou `wsl orchestra` do PowerShell/cmd, sem
-precisar entrar no Linux.
+**To use it afterwards:** `orchestra` inside WSL, or `wsl orchestra` from PowerShell/cmd,
+without having to enter Linux.
 
-> Use o **Windows Terminal** (padrão no Windows 11, e na Microsoft Store no Windows 10). Ele
-> desenha corretamente as molduras e os ícones dos painéis; a janela preta antiga do Prompt de
-> Comando, não.
+> Use **Windows Terminal** (the default on Windows 11, and in the Microsoft Store on
+> Windows 10). It draws the pane borders and icons correctly; the old black Command Prompt
+> window does not.
 >
-> Mantenha o projeto **dentro** do WSL (`~/meu-app`). Em `/mnt/c` funciona, mas o I/O é bem
-> mais lento.
+> Keep the project **inside** WSL (`~/my-app`). Under `/mnt/c` it works, but I/O is much
+> slower.
 
-### Atualizar
+### Updating
 
-Rode o mesmo comando de instalação de novo. A instalação é substituída por completo, então
-arquivos de versões antigas são removidos junto:
+Run the same install command again. The installation is replaced entirely, so files from
+old versions are removed along with it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
 ```
 
-Um detalhe que economiza confusão: **painéis já abertos continuam rodando o código antigo**.
-Depois de atualizar, encerre e suba de novo:
+One detail that saves confusion: **panes that are already open keep running the old code**.
+After updating, shut down and start again:
 
 ```bash
 orchestra down
 orchestra
 ```
 
-Seu time e seus prompts continuam onde estão: eles vivem em
-`~/.local/state/orchestra-agents/projects/`, fora da pasta de instalação, e a atualização
-não mexe neles.
+Your team and your prompts stay where they are: they live in
+`~/.local/state/orchestra-agents/projects/`, outside the installation folder, and the update
+does not touch them.
 
 ---
 
-## 🗑️ Desinstalação
+## 🗑️ Uninstallation
 
-**Um comando só.** Ele faz tudo: encerra as sessões abertas (de todos os projetos), remove o
-comando `orchestra`, as linhas de `PATH` que tiver criado, o estado, o diretório de instalação
-e até o zellij, se tiver sido o instalador do Orchestra que o colocou aí.
+**A single command.** It does everything: it ends the open sessions (of all projects) and
+removes the `orchestra` command, the `PATH` lines it created, the state, the installation
+directory and even zellij, if it was the Orchestra installer that put it there.
 
 ```bash
 orchestra uninstall
 ```
 
-Ou, se o comando já não existir (ou você preferir):
+Or, if the command no longer exists (or you prefer):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
 ```
 
-Você **não** precisa dar `orchestra down` antes, nem fechar painel nenhum.
+You do **not** need to run `orchestra down` first, nor close any pane.
 
-No **Windows**, é o mesmo comando dentro do WSL, ou `wsl orchestra uninstall` direto do
-PowerShell. O WSL em si não é removido: ele é seu, não do Orchestra.
+On **Windows**, it is the same command inside WSL, or `wsl orchestra uninstall` straight from
+PowerShell. WSL itself is not removed: it is yours, not Orchestra's.
 
-O que ele **preserva**, de propósito:
+What it **preserves**, on purpose:
 
-| Preservado | Por quê |
-|------------|---------|
-| Claude Code, OpenCode, Codex | ferramentas suas, usadas fora do Orchestra |
-| zellij que **você** já tinha | só é removido o que o instalador do Orchestra baixou |
+| Preserved | Why |
+|-----------|-----|
+| Claude Code, OpenCode, Codex | your own tools, used outside Orchestra |
+| zellij that **you** already had | only what the Orchestra installer downloaded is removed |
 
-Fora isso, `orchestra uninstall` remove **tudo** o que o Orchestra colocou na máquina:
-instalação, times e prompts de todos os projetos, symlink do comando, linhas de PATH nos
-seus `rc`, layout do zellij, o agente `reviewer` que ele adicionou ao config do OpenCode e
-**o próprio zellij, se foi ele que o instalou**. Seus projetos não guardam nada do Orchestra,
-então não sobra nada neles.
+Apart from that, `orchestra uninstall` removes **everything** Orchestra put on the machine:
+the installation, the teams and prompts of every project, the command symlink, the PATH lines
+in your `rc` files, the zellij layout, the `reviewer` agent it added to the OpenCode config
+and **zellij itself, if it was the one that installed it**. Your projects keep nothing from
+Orchestra, so nothing is left behind in them.
 
-O instalador anota cada coisa que instala e por qual meio (`brew`, binário oficial ou
-`cargo`), e a desinstalação desfaz cada uma pelo mesmo meio, no sistema operacional em que
-você está. O que já existia na máquina antes não é anotado — e portanto nunca é removido.
-Sua configuração pessoal do zellij (`~/.config/zellij`) também fica.
-| agente `reviewer` na config do OpenCode | é uma entrada na sua config; o caminho é mostrado no fim |
+The installer records each thing it installs and by which means (`brew`, official binary or
+`cargo`), and the uninstall undoes each one by the same means, on the operating system you
+are on. What already existed on the machine beforehand is not recorded, and therefore is
+never removed. Your personal zellij configuration (`~/.config/zellij`) also stays.
+| `reviewer` agent in the OpenCode config | it is an entry in your config; the path is shown at the end |
 
-> Se for **reinstalar na mesma janela** do terminal, limpe o cache de comandos do shell:
-> `hash -r` no bash, `rehash` no zsh. Sem isso ele ainda aponta para o binário removido e você
-> vê um erro confuso. O próprio desinstalador lembra disso no fim.
+> If you are going to **reinstall in the same terminal window**, clear the shell's command
+> cache: `hash -r` in bash, `rehash` in zsh. Without it the shell still points to the removed
+> binary and you see a confusing error. The uninstaller itself reminds you of this at the end.
 
-### Reinstalar do zero
+### Reinstalling from scratch
 
 ```bash
 orchestra uninstall
@@ -213,16 +213,16 @@ orchestra doctor
 
 ---
 
-## 🎬 Uso
+## 🎬 Usage
 
 ```bash
-cd ~/meu-projeto
-orchestra                 # monta o time e abre o zellij
+cd ~/my-project
+orchestra                 # builds the team and opens zellij
 
-orchestra ~/outro-app     # ou aponte o projeto direto, sem trocar de pasta
+orchestra ~/other-app     # or point at the project directly, without changing folder
 ```
 
-### O menu do time
+### The team menu
 
 ```
 🎛️  Monte o time deste projeto
@@ -241,101 +241,102 @@ orchestra ~/outro-app     # ou aponte o projeto direto, sem trocar de pasta
    Enter abre o time no zellij · q sai sem abrir
 ```
 
-**"IA" é qual CLI roda o agente** (Claude Code, OpenCode ou Codex). Não tem relação com
-backend/frontend de software. O que o agente *faz* é a coluna **O QUE FAZ**, definida pelo
-papel ou pelo texto que você escreve.
+**"IA" (AI) is which CLI runs the agent** (Claude Code, OpenCode or Codex). It has nothing to
+do with software backend/frontend. What the agent *does* is the **O QUE FAZ** (what it does)
+column, defined by the role or by the text you write.
 
-Para desistir: `q`, `Esc` ou a linha **sair**. Nada é aberto e as trocas feitas na tela são
-descartadas.
+To back out: `q`, `Esc` or the **sair** (quit) line. Nothing is opened and the changes made
+on screen are discarded.
 
-O time começa com **líder + coder + reviewer** e você ajusta à vontade. A escolha vale para
-**aquele projeto** e fica em `~/.local/state/orchestra-agents/projects/<projeto>/team.json`.
+The team starts with **leader + coder + reviewer** and you adjust it freely. The choice
+applies to **that project** and is kept in `~/.local/state/orchestra-agents/projects/<project>/team.json`.
 
-> **Time inteiro num comando** (útil em projeto novo, e para pular o menu em CI):
+> **The whole team in one command** (useful in a new project, and to skip the menu in CI):
 >
 > ```bash
 > ORCHESTRA_TEAM="leader=claude,coder=codex,reviewer=opencode,tester=claude,docs=opencode,architect=claude,devops=codex" orchestra
 > ```
 >
-> Sintaxe: `nome=ia` ou `nome=ia:papel`. O sufixo deixa um nome livre herdar um
-> preset (`qa=claude:tester`). Nome sem preset e sem sufixo vira `custom`, com prompt
-> editável em `~/.local/state/orchestra-agents/projects/<projeto>/prompts/<nome>.md`.
+> Syntax: `name=ai` or `name=ai:role`. The suffix lets a free-form name inherit a
+> preset (`qa=claude:tester`). A name with no preset and no suffix becomes `custom`, with a
+> prompt you can edit at `~/.local/state/orchestra-agents/projects/<project>/prompts/<name>.md`.
 
-### Papéis prontos
+### Ready-made roles
 
-Cada agente tem um **papel**, que define seu prompt de sistema:
+Each agent has a **role**, which defines its system prompt:
 
-| Papel | | O que faz |
-|-------|---|-----------|
-| `coder` | 🔧 | implementa código |
-| `reviewer` | 🔍 | code review (read-only, por disciplina de prompt) |
-| `tester` | 🧪 | escreve e roda testes |
-| `docs` | 📚 | documentação e READMEs |
-| `architect` | 📐 | arquitetura e decisões de design |
-| `devops` | 🚀 | build, CI/CD e infraestrutura |
+| Role | | What it does |
+|------|---|--------------|
+| `coder` | 🔧 | implements code |
+| `reviewer` | 🔍 | code review (read-only, by prompt discipline) |
+| `tester` | 🧪 | writes and runs tests |
+| `docs` | 📚 | documentation and READMEs |
+| `architect` | 📐 | architecture and design decisions |
+| `devops` | 🚀 | build, CI/CD and infrastructure |
 
-Qualquer outro nome vira um agente **`custom`**: você define o que ele faz, na hora.
+Any other name becomes a **`custom`** agent: you define what it does, on the spot.
 
 ```bash
-# papel pronto
+# ready-made role
 orchestra add tester --ia claude --role tester
 
-# função sua, escrita na criação
+# your own function, written at creation
 orchestra add gitops --ia claude \
   --prompt "Cuida só de git: commit e push no padrão do repo. NUNCA edita código."
 
 orchestra rm gitops
 ```
 
-Sem `--prompt`, o agente custom nasce com um arquivo em `prompts/<nome>.md` (dentro do
-diretório do projeto no Orchestra; o `add` mostra o caminho completo) para você escrever
-depois. No menu, o `a` pergunta a mesma coisa: **nome → função → IA →
-o que ele faz**. A IA nunca é adivinhada pelo nome: é sempre escolha sua.
+Without `--prompt`, the custom agent is born with a file at `prompts/<name>.md` (inside the
+project's directory in Orchestra; `add` shows the full path) for you to write in later. In
+the menu, `a` asks the same thing: **name → role → AI →
+what it does**. The AI is never guessed from the name: it is always your choice.
 
-O nome vira argumento de comando (`orchestra send deploy-prod "…"`), então segue uma regra
-estrita: **minúsculas, sem espaços e sem acentos**, começando por letra, aceitando `-` e `_`
-(ex.: `tester`, `deploy-prod`). O menu explica a regra e deixa você tentar de novo; o CLI diz
-exatamente o que está errado.
+The name becomes a command argument (`orchestra send deploy-prod "…"`), so it follows a
+strict rule: **lowercase, no spaces and no accents**, starting with a letter, allowing `-`
+and `_` (e.g. `tester`, `deploy-prod`). The menu explains the rule and lets you try again;
+the CLI says exactly what is wrong.
 
-O nome fica em minúsculas nos comandos (`orchestra send gitops "…"`) e aparece em
-**MAIÚSCULAS** no painel, com o ícone do papel, igual aos demais: `✨ GITOPS`.
+The name stays lowercase in commands (`orchestra send gitops "…"`) and shows up in
+**UPPERCASE** in the pane, with the role icon, like the others: `✨ GITOPS`.
 
-Todo agente, de qualquer IA, recebe automaticamente o mesmo **protocolo**: obedecer o líder e
-devolver a resposta com `orchestra done`. Não há agente que fique de fora.
+Every agent, of any AI, automatically receives the same **protocol**: obey the leader and
+hand back the answer with `orchestra done`. No agent is left out.
 
-### O nome não define a função
+### The name does not define the function
 
-Criar um agente chamado `pr` não o torna responsável por Pull Requests. O nome é só o
-endereço do comando (`orchestra send pr "…"`). Quem ensina a função é a descrição:
+Creating an agent called `pr` does not make it responsible for Pull Requests. The name is
+just the command's address (`orchestra send pr "…"`). What teaches the function is the
+description:
 
 ```bash
 orchestra add pr --ia claude \
   --prompt "Abre e atualiza Pull Requests no GitHub via gh. Não implementa features."
 ```
 
-Isso alimenta **os dois lados**:
+This feeds **both sides**:
 
-- o agente recebe a descrição como prompt de sistema, então sabe do que cuida;
-- o líder recebe a mesma linha no roster do time, então sabe **quando** acionar aquele agente:
+- the agent receives the description as its system prompt, so it knows what it handles;
+- the leader receives the same line in the team roster, so it knows **when** to call that agent:
 
 ```
 - ✨ PR (claude): Abre e atualiza Pull Requests no GitHub via gh. Não implementa features.
 ```
 
-Sem descrição, o agente nasce genérico e o líder o vê apenas como "agente customizado", então não
-vai saber rotear nada para ele. Por isso o `add` avisa quando isso acontece, e o menu explica
-antes de perguntar.
+Without a description, the agent is born generic and the leader sees it only as a "custom
+agent", so it will not know how to route anything to it. That is why `add` warns when this
+happens, and the menu explains before asking.
 
-### O líder é avisado sozinho
+### The leader is notified automatically
 
-Criar um agente com o time já no ar **não** exige que você conte nada a ele: a nota chega no
-painel do líder na hora.
+Creating an agent while the team is already running does **not** require you to tell the
+leader anything: the note reaches the leader's pane right away.
 
 ```
 📣 líder avisado
 ```
 
-O que ele recebe:
+What it receives:
 
 ```
 [ORCHESTRA] O time mudou: o agente 'pr' entrou agora (claude).
@@ -343,67 +344,67 @@ Função: Abre e atualiza Pull Requests no GitHub via gh.
 Delegue com: orchestra send pr "<tarefa>"   ·   resultado: orchestra await pr
 ```
 
-Vale também para o `orchestra rm`: o líder é avisado de que aquele agente saiu e para de
-delegar para ele. Se o comando partiu do próprio painel do líder, nada é injetado (ele já
-sabe: foi ele quem rodou).
+The same applies to `orchestra rm`: the leader is told that the agent left and stops
+delegating to it. If the command came from the leader's own pane, nothing is injected (it
+already knows: it was the one that ran it).
 
-O painel do agente novo abre **na mesma tela dos outros**, dividindo o espaço, nunca numa
-janela flutuante por cima, nunca em outra aba. Mesmo que você esteja com o foco em outra aba
-do zellij na hora, ele nasce junto do time.
+The new agent's pane opens **on the same screen as the others**, splitting the space, never
+in a floating window on top, never in another tab. Even if you have focus on another zellij
+tab at that moment, it is born next to the team.
 
-### Modo natural (recomendado)
+### Natural mode (recommended)
 
-Depois de subir, **apenas converse com o líder**. Ele já sobe conhecendo o time deste
-projeto e delega sozinho:
+After launching, **just talk to the leader**. It already starts out knowing this project's
+team and delegates on its own:
 
 ```
 você ▸ cria um endpoint POST /users com validação e depois manda revisar
 líder ▸ delega ao CODER… (roda no painel ao lado) e depois ao REVIEWER
 ```
 
-Você não precisa decorar comando nenhum. O líder despacha, busca os resultados com `await` e
-reporta.
+You do not need to memorize any command. The leader dispatches, fetches the results with
+`await` and reports back.
 
-### Modo manual (controle fino)
+### Manual mode (fine control)
 
 ```bash
-orchestra send coder    "crie um endpoint POST /users com validação"
-orchestra send reviewer "revise as últimas mudanças e aponte bugs"
-orchestra await coder           # espera a resposta completa (bloqueante)
-orchestra result coder          # vê a resposta quando quiser (não-bloqueante)
-orchestra agents                # quem é quem e o estado de cada painel
-orchestra down                  # encerra a sessão
+orchestra send coder    "create a POST /users endpoint with validation"
+orchestra send reviewer "review the latest changes and point out bugs"
+orchestra await coder           # waits for the full answer (blocking)
+orchestra result coder          # see the answer whenever you like (non-blocking)
+orchestra agents                # who is who and the state of each pane
+orchestra down                  # ends the session
 ```
 
-### Comandos
+### Commands
 
-| Comando | Descrição |
-|---------|-----------|
-| `orchestra` | Monta o time e abre o zellij no diretório atual |
-| `orchestra <dir>` | O mesmo, para outro projeto: `orchestra ~/meu-app` |
-| `orchestra send <agente> "<tarefa>"` | Despacha tarefa **assíncrona** |
-| `orchestra result <agente>` | Última resposta do agente (não-bloqueante) |
-| `orchestra result <agente> --wait [s]` | Bloqueia até a resposta completa (padrão: 300s) |
-| `orchestra await <agente> [s]` | Alias de `result --wait` |
-| `orchestra done <agente> <task>` | *(usado pelo agente)* devolve a resposta, lendo stdin |
-| `orchestra agents` | Lista o time e o estado de cada painel |
-| `orchestra add <nome> --ia <ia> [--role r] [--prompt "…"]` | Cria um agente e abre o painel |
-| `orchestra rm <nome>` | Remove o agente e fecha o painel |
-| `orchestra leader <ia>` | Troca a IA do líder |
-| `orchestra heal` | Recria painéis que morreram ou foram fechados |
-| `orchestra status` | Estado da sessão e dos agentes |
-| `orchestra doctor` | Diagnostica pré-requisitos, IAs e painéis |
-| `orchestra down` | Encerra a sessão do time |
-| `orchestra uninstall` | Remove o Orchestra Agents por completo |
-| `orchestra version` | Versão |
+| Command | Description |
+|---------|-------------|
+| `orchestra` | Builds the team and opens zellij in the current directory |
+| `orchestra <dir>` | The same, for another project: `orchestra ~/my-app` |
+| `orchestra send <agent> "<task>"` | Dispatches an **asynchronous** task |
+| `orchestra result <agent>` | The agent's last answer (non-blocking) |
+| `orchestra result <agent> --wait [s]` | Blocks until the full answer (default: 300s) |
+| `orchestra await <agent> [s]` | Alias of `result --wait` |
+| `orchestra done <agent> <task>` | *(used by the agent)* hands back the answer, reading stdin |
+| `orchestra agents` | Lists the team and the state of each pane |
+| `orchestra add <name> --ia <ai> [--role r] [--prompt "…"]` | Creates an agent and opens its pane |
+| `orchestra rm <name>` | Removes the agent and closes its pane |
+| `orchestra leader <ai>` | Switches the leader's AI |
+| `orchestra heal` | Recreates panes that died or were closed |
+| `orchestra status` | State of the session and the agents |
+| `orchestra doctor` | Diagnoses prerequisites, AIs and panes |
+| `orchestra down` | Ends the team's session |
+| `orchestra uninstall` | Removes Orchestra Agents completely |
+| `orchestra version` | Version |
 
-**Exit codes do `await` / `result --wait`** (o líder checa automaticamente):
-`0` resposta completa · `1` erro de validação · `2` **timeout** (saída prefixada com
-`[TIMEOUT/PARCIAL]`, **não confiável**) · `3` o agente reportou erro.
+**Exit codes of `await` / `result --wait`** (the leader checks them automatically):
+`0` complete answer · `1` validation error · `2` **timeout** (output prefixed with
+`[TIMEOUT/PARCIAL]`, **not reliable**) · `3` the agent reported an error.
 
 ---
 
-## 🩺 Diagnóstico (`orchestra doctor`)
+## 🩺 Diagnostics (`orchestra doctor`)
 
 ```text
 🩺 Orchestra Agents: diagnóstico
@@ -436,153 +437,154 @@ Orchestra:
 Resumo: o essencial está ok, com 2 aviso(s).
 ```
 
-| Símbolo | Significado |
-|---------|-------------|
+| Symbol | Meaning |
+|--------|---------|
 | ✔ | OK |
-| ! | aviso: funciona, mas vale ajustar |
-| ✖ | falha: algo essencial está faltando |
+| ! | warning: it works, but is worth adjusting |
+| ✖ | failure: something essential is missing |
 
-Sai com **`0`** quando não há falhas (mesmo com avisos) e **`1`** quando há ao menos um ✖.
+Exits with **`0`** when there are no failures (even with warnings) and **`1`** when there is
+at least one ✖.
 
 ---
 
-## ⚙️ Configuração
+## ⚙️ Configuration
 
-### Modelos (importante)
+### Models (important)
 
-O Orchestra **usa os modelos que você já tem configurados** e não força nenhum. Configurou no
-Claude Code / OpenCode / Codex → é o que o Orchestra usa. Os overrides abaixo existem só se
-você quiser fixar algo.
+Orchestra **uses the models you already have configured** and forces none. Whatever you
+configured in Claude Code / OpenCode / Codex is what Orchestra uses. The overrides below
+exist only if you want to pin something.
 
-### Variáveis
+### Variables
 
-Por ambiente ou em `~/.config/orchestra-agents/config` (formato shell):
+Through the environment or in `~/.config/orchestra-agents/config` (shell format):
 
-| Variável | Padrão | Descrição |
-|----------|--------|-----------|
-| `ORCHESTRA_TEAM` | *(menu)* | Compõe o time sem TTY: `"leader=claude,coder=codex,tester=opencode"`. Definido = pula o menu |
-| `ORCHESTRA_CODER` / `ORCHESTRA_REVIEWER` | *(vazio)* | Aliases herdados: fixam só a IA desses dois agentes |
-| `ORCHESTRA_MODEL` | *(vazio)* | Override do modelo dos agentes **OpenCode** (`provider/modelo`) |
-| `ORCHESTRA_CODEX_MODEL` | *(vazio)* | Override do modelo dos agentes **Codex** |
-| `ORCHESTRA_MODEL_CLAUDE` | *(vazio)* | Override do modelo dos agentes **Claude Code** |
-| `ORCHESTRA_TIMEOUT` | `300` | Timeout padrão (segundos) do `await` |
-| `ORCHESTRA_CODEX_SANDBOX` | `workspace-write` | Sandbox dos agentes Codex |
-| `ORCHESTRA_MUX` | `zellij` | Multiplexador (`stub` é usado pelos testes) |
-| `ORCHESTRA_HOME` | `~/.orchestra-agents` | Diretório de instalação |
-| `ORCHESTRA_STATE` | `~/.local/state/orchestra-agents` | Estado global (projeto, sessão do mux) |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORCHESTRA_TEAM` | *(menu)* | Composes the team without a TTY: `"leader=claude,coder=codex,tester=opencode"`. Set = skips the menu |
+| `ORCHESTRA_CODER` / `ORCHESTRA_REVIEWER` | *(empty)* | Legacy aliases: pin the AI of just those two agents |
+| `ORCHESTRA_MODEL` | *(empty)* | Model override for **OpenCode** agents (`provider/model`) |
+| `ORCHESTRA_CODEX_MODEL` | *(empty)* | Model override for **Codex** agents |
+| `ORCHESTRA_MODEL_CLAUDE` | *(empty)* | Model override for **Claude Code** agents |
+| `ORCHESTRA_TIMEOUT` | `300` | Default timeout (seconds) of `await` |
+| `ORCHESTRA_CODEX_SANDBOX` | `workspace-write` | Sandbox of the Codex agents |
+| `ORCHESTRA_MUX` | `zellij` | Multiplexer (`stub` is used by the tests) |
+| `ORCHESTRA_HOME` | `~/.orchestra-agents` | Installation directory |
+| `ORCHESTRA_STATE` | `~/.local/state/orchestra-agents` | Global state (project, mux session) |
 
-Exemplo de `~/.config/orchestra-agents/config`:
+Example `~/.config/orchestra-agents/config`:
 
 ```sh
-ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # opcional: fixa o modelo dos agentes OpenCode
-ORCHESTRA_TIMEOUT=600                           # opcional: tarefas longas
+ORCHESTRA_MODEL="anthropic/claude-sonnet-4-6"   # optional: pins the model of OpenCode agents
+ORCHESTRA_TIMEOUT=600                           # optional: long tasks
 ```
 
-### Onde o Orchestra guarda as coisas
+### Where Orchestra keeps things
 
-**Nada** vai para a pasta do seu projeto. Cada projeto ganha um diretório próprio no estado
-do Orchestra, identificado pelo nome da pasta + um checksum do caminho (assim
-`~/cliente-a/api` e `~/cliente-b/api` não se misturam):
+**Nothing** goes into your project folder. Each project gets its own directory in
+Orchestra's state, identified by the folder name + a checksum of the path (so
+`~/client-a/api` and `~/client-b/api` do not get mixed up):
 
 ```
-~/.local/state/orchestra-agents/projects/meu-projeto-1234567/
-├── team.json         # composição do time
-├── project.path      # a que projeto este diretório pertence
-├── prompts/<nome>.md # prompts dos agentes custom
-└── run/              # runtime descartável
+~/.local/state/orchestra-agents/projects/my-project-1234567/
+├── team.json         # team composition
+├── project.path      # which project this directory belongs to
+├── prompts/<name>.md # prompts of the custom agents
+└── run/              # disposable runtime
 ```
 
-> Quem usou versões anteriores tinha isso em `<projeto>/.orchestra/`. Na primeira vez que
-> você abrir o projeto, o Orchestra move o time e os prompts para o novo lugar sozinho e
-> limpa a pasta do projeto — você não perde nada.
+> Anyone who used earlier versions had this in `<project>/.orchestra/`. The first time you
+> open the project, Orchestra moves the team and the prompts to the new location on its own
+> and cleans up the project folder — you lose nothing.
 
 ---
 
-## 🧩 Estrutura
+## 🧩 Structure
 
 ```
 orchestra-agents/
-├── install.sh                   # instalador (curl | bash)
-├── uninstall.sh                 # desinstalador
+├── install.sh                   # installer (curl | bash)
+├── uninstall.sh                 # uninstaller
 ├── bin/orchestra                # CLI
 ├── lib/
-│   ├── core.sh                  # núcleo: despacho, resultados, gestão do time, doctor
-│   ├── team.sh                  # modelo do time (team.json) e prompts
-│   ├── mux.sh                   # abstração do multiplexador (zellij | stub)
-│   └── layout.sh                # gera o layout KDL do time
+│   ├── core.sh                  # core: dispatch, results, team management, doctor
+│   ├── team.sh                  # team model (team.json) and prompts
+│   ├── mux.sh                   # multiplexer abstraction (zellij | stub)
+│   └── layout.sh                # generates the team's KDL layout
 ├── agents/
-│   ├── run-agent.sh             # launcher + supervisor de um agente (qualquer IA)
-│   ├── leader-prompt.md         # instruções de orquestração do líder
-│   ├── roles/*.md               # prompts dos papéis prontos
+│   ├── run-agent.sh             # launcher + supervisor of an agent (any AI)
+│   ├── leader-prompt.md         # the leader's orchestration instructions
+│   ├── roles/*.md               # prompts of the ready-made roles
 │   └── leader.sh, attach-*.sh   # compat shims → run-agent.sh
 └── config/
-    ├── opencode.reviewer.jsonc  # agente reviewer de referência
-    └── merge_reviewer.py        # mescla esse agente na sua config do OpenCode
+    ├── opencode.reviewer.jsonc  # reference reviewer agent
+    └── merge_reviewer.py        # merges that agent into your OpenCode config
 ```
 
 ---
 
-## 🧪 Testes
+## 🧪 Tests
 
 ```bash
 ./tests/smoke.sh
 ```
 
-Cobre sintaxe de todos os scripts, o modelo do time, composição por env, `add`/`rm`, prompts
-de papel e roster, o ciclo completo `send → done → await`, exit codes, o layout gerado e o
-`doctor`. Roda com `ORCHESTRA_MUX=stub` num projeto temporário, e **não** encosta numa sessão
-real nem chama modelo, então serve tanto local quanto no CI.
+It covers the syntax of all scripts, the team model, composition by env, `add`/`rm`, role
+prompts and roster, the full `send → done → await` cycle, exit codes, the generated layout
+and `doctor`. It runs with `ORCHESTRA_MUX=stub` in a temporary project, and does **not**
+touch a real session or call a model, so it works both locally and in CI.
 
-**CI (GitHub Actions):** [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) roda o
-smoke test a cada push/PR na `main`, mais `shellcheck` de forma informativa.
+**CI (GitHub Actions):** [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) runs
+the smoke test on every push/PR to `main`, plus `shellcheck` on an informational basis.
 
 ---
 
-## 🚢 Processo de release
+## 🚢 Release process
 
-O script [`scripts/release.sh`](scripts/release.sh) **calcula o próximo número** (semver),
-atualiza o `VERSION` em `bin/orchestra`, faz o commit, cria a tag, dá push e publica a release
-com notas automáticas:
+The [`scripts/release.sh`](scripts/release.sh) script **computes the next number** (semver),
+updates `VERSION` in `bin/orchestra`, makes the commit, creates the tag, pushes and publishes
+the release with automatic notes:
 
 ```bash
 ./scripts/release.sh patch   # 0.2.0 -> 0.2.1
 ./scripts/release.sh minor   # 0.2.0 -> 0.3.0
 ./scripts/release.sh major   # 0.2.0 -> 1.0.0
-./scripts/release.sh 1.2.3   # versão explícita
-DRY_RUN=1 ./scripts/release.sh minor   # só mostra o que faria
+./scripts/release.sh 1.2.3   # explicit version
+DRY_RUN=1 ./scripts/release.sh minor   # only shows what it would do
 ```
 
-> A publicação precisa do `gh` autenticado como dono do repo; sem isso, o script cria a tag e
-> mostra o comando para finalizar.
+> Publishing requires `gh` authenticated as the repo owner; without it, the script creates
+> the tag and shows the command to finish.
 
 ---
 
 ## 🩺 Troubleshooting
 
-- **`orchestra: command not found`** → adicione `~/.local/bin` ao `PATH`.
-- **Painel sumiu / foi fechado** → `orchestra heal` recria. O próprio `send` também recria o
-  painel do agente se ele estiver faltando.
-- **O painel reinicia sozinho em loop** → a IA daquele painel está falhando ao subir (binário ausente ou
-  flag inválida). Depois de 3 falhas rápidas o supervisor para e libera um shell; rode
-  `orchestra doctor`.
-- **`[TIMEOUT/PARCIAL]` na resposta** → o worker não chamou `orchestra done`. Aumente o
-  timeout (`orchestra await coder 600`) ou reenvie a tarefa. **Nunca** trate esse texto como
-  resposta final.
-- **`⚠️ você já está dentro de uma sessão zellij`** → saia para um terminal normal antes de
-  rodar `orchestra` (evita aninhar sessões).
+- **`orchestra: command not found`** → add `~/.local/bin` to your `PATH`.
+- **Pane vanished / was closed** → `orchestra heal` recreates it. `send` itself also
+  recreates the agent's pane if it is missing.
+- **The pane keeps restarting in a loop** → the AI in that pane is failing to start (missing
+  binary or invalid flag). After 3 quick failures the supervisor stops and drops you into a
+  shell; run `orchestra doctor`.
+- **`[TIMEOUT/PARCIAL]` in the answer** → the worker did not call `orchestra done`. Raise
+  the timeout (`orchestra await coder 600`) or resend the task. **Never** treat that text as
+  the final answer.
+- **`⚠️ você já está dentro de uma sessão zellij`** → leave to a regular terminal before
+  running `orchestra` (this avoids nesting sessions).
 
 ---
 
-## 🤝 Contribuindo
+## 🤝 Contributing
 
-Contribuições são bem-vindas! Veja o **[CONTRIBUTING.md](CONTRIBUTING.md)** para setup, testes
-e o fluxo de PR.
+Contributions are welcome! See **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup, tests
+and the PR flow.
 
-As mensagens de commit são em inglês e adotam, **como referência de convenção**, o guia
-**[Padrões de Commits (iuricode)](https://github.com/iuricode/padroes-de-commits)** (emoji + tipo).
+Commit messages are in English and adopt, **as a convention reference**, the guide
+**[Padrões de Commits (iuricode)](https://github.com/iuricode/padroes-de-commits)** (emoji + type).
 
 ---
 
-## 📄 Licença
+## 📄 License
 
 MIT © 2026 orcioly

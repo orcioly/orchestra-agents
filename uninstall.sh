@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Orchestra Agents — desinstalador
-# Uso:
-#   orchestra uninstall            (recomendado)
-#   ou:  curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
+# Orchestra Agents — uninstaller
+# Usage:
+#   orchestra uninstall            (recommended)
+#   or:  curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/uninstall.sh | bash
 set -uo pipefail
 INSTALL_DIR="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
 
 if [ -f "$INSTALL_DIR/lib/core.sh" ]; then
-  # usa a função oficial de uninstall
+  # use the official uninstall function
   # shellcheck source=/dev/null
   . "$INSTALL_DIR/lib/core.sh"
   uninstall
   exit 0
 fi
 
-# fallback self-contained (se o diretório de instalação já sumiu)
+# self-contained fallback (if the install directory is already gone)
 echo "🧹 Desinstalando Orchestra Agents (modo standalone)..."
 STATE_DIR="${ORCHESTRA_STATE:-$HOME/.local/state/orchestra-agents}"
-# encerra as sessões do Orchestra de TODOS os projetos (mesmo comportamento do
-# 'orchestra uninstall'); sessões do usuário com outros nomes ficam intactas
+# ends the Orchestra sessions of ALL projects (same behavior as
+# 'orchestra uninstall'); user sessions with other names are left intact
 if command -v zellij >/dev/null 2>&1; then
   zellij list-sessions --no-formatting 2>/dev/null | awk '{print $1}' | grep '^orchestra-' \
     | while IFS= read -r s; do
@@ -41,9 +41,9 @@ for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
   tmp="$(mktemp)"
   awk '/# orchestra-agents \(PATH\)/{skip=2} skip>0{skip--; next} {print}' "$rc" >"$tmp" && mv "$tmp" "$rc"
 done
-# Mesmo contrato do 'orchestra uninstall': desfaz o que o instalador registrou,
-# cada item pelo método com que entrou. Duplicado aqui de propósito — este script
-# roda quando a instalação (e portanto lib/core.sh) já não existe.
+# Same contract as 'orchestra uninstall': undoes what the installer registered,
+# each item by the method it came in with. Duplicated here on purpose — this script
+# runs when the installation (and therefore lib/core.sh) no longer exists.
 case "$(uname -s 2>/dev/null)" in
   Darwin) OS=macos ;;
   Linux)  if grep -qi microsoft /proc/version 2>/dev/null; then OS=wsl; else OS=linux; fi ;;
@@ -77,8 +77,8 @@ fi
 zj="$(cat "$STATE_DIR/zellij.ours" 2>/dev/null || true)"
 [ -n "$zj" ] && [ -e "$zj" ] && rm -f "$zj" \
   && { echo "  removido $zj (tinha sido instalado pelo Orchestra)"; removeu=1; }
-# ~/.config/zellij é do usuário (config.kdl e layouts dele), não do Orchestra:
-# removemos só o layout que geramos e avisamos sobre o resto.
+# ~/.config/zellij belongs to the user (their config.kdl and layouts), not to Orchestra:
+# we remove only the layout we generated and warn about the rest.
 if [ "$removeu" = 1 ] && [ -d "$HOME/.config/zellij" ] \
    && [ -n "$(ls -A "$HOME/.config/zellij" 2>/dev/null)" ]; then
   echo "  ⚠️  ~/.config/zellij ficou (é sua configuração do zellij, não do Orchestra)"
