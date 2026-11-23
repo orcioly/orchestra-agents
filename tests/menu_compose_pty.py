@@ -1,47 +1,47 @@
 #!/usr/bin/env python3
-"""Dirige select_team pelos fluxos que ALTERAM (ou poderiam alterar) o
-time — 'a' até o fim, 'a' cancelado, 'd', Espaço e Enter numa linha de
-agente — o ponto cego que tests/menu_pty.py (setas/redesenho) sempre
-deixou: aquele roteiro nunca apertava 'a', 'd', Espaço ou Enter, só a seta
-↓ até '+ adicionar agente' e 'q' (OAV2-26).
+"""Drives select_team through the flows that CHANGE (or could change) the
+team: 'a' to the end, 'a' cancelled, 'd', Space and Enter on an agent row.
+This is the blind spot tests/menu_pty.py (arrows/redraw) always left: that
+script never pressed 'a', 'd', Space or Enter, only the down arrow to
+'+ adicionar agente' and 'q' (OAV2-26).
 
-Por que em arquivo PRÓPRIO, e não em tests/menu_pty.py (motor: setas,
-redesenho, Esc) nem em tests/menu_ghost_pty.py (classificação de tecla via
-drenagem, com SESSION_CASES no mesmo espírito de dirigir select_team de
-verdade): este roteiro inspeciona EFEITO DE ESTADO de teclas que o usuário
-aperta de propósito — team.json e o prompt_file gerado —, não sobra de byte
-nem redesenho. Reaproveita o padrão de isolamento e drain_until (marcador em
-vez de silêncio) já validado em tests/menu_ghost_pty.py.
+Why in its OWN file, and not in tests/menu_pty.py (engine: arrows,
+redraw, Esc) nor in tests/menu_ghost_pty.py (key classification via
+draining, with SESSION_CASES in the same spirit of driving the real
+select_team): this script inspects the STATE EFFECT of keys the user presses
+on purpose (team.json and the generated prompt_file), not leftover bytes or
+redraw. It reuses the isolation pattern and drain_until (marker instead of
+silence) already validated in tests/menu_ghost_pty.py.
 
-OAV2-27: o achado registrado aqui ao escrever o roteiro original — _st_del
-('d', lib/core.sh) removia o agente IMEDIATAMENTE, sem nenhuma chamada a
-'menu_confirm' (lib/menu.sh linha 253) em todo o repositório — foi corrigido.
-'d' agora pede confirmação (nome do agente visível na pergunta, default NÃO:
-Enter sozinho não remove) antes de chamar agent_rm. O caso
-'delete_with_confirmation' abaixo cobre 's'/'n'/Enter sozinho; substitui o
-antigo 'del_sem_confirmacao'.
+OAV2-27: the finding recorded here when the original script was written,
+_st_del ('d', lib/core.sh) removed the agent IMMEDIATELY, with no call to
+'menu_confirm' (lib/menu.sh line 253) anywhere in the repository, has been
+fixed. 'd' now asks for confirmation (agent name visible in the question,
+default NO: a lone Enter does not remove) before calling agent_rm. The
+'delete_with_confirmation' case below covers 's'/'n'/lone Enter; it replaces
+the old 'del_sem_confirmacao'.
 
-Não há aqui um caso de "tecla fantasma parou na confirmação": com o motor
-ATUAL a sequência ghost já é drenada como 'unknown' antes de chegar a 'd', e
-um caso que manda essa sequência daqui nunca exercita _st_del de verdade —
-achado da revisão da rodada 3 (o revisor reverteu _st_del para a versão sem
-confirmação e o caso continuou 'OK', prova de que ele não testava nada). A
-segunda camada (a sobra REALMENTE chegando a 'd', contra uma cópia do motor
-PRÉ-OAV2-25) é responsabilidade de 'run_session_case' em
-tests/menu_ghost_pty.py, que agora devolve 'FAIL:delete_prompt_leaked' com
-precisão quando isso acontece.
+There is no "ghost key stopped at the confirmation" case here: with the
+CURRENT engine the ghost sequence is already drained as 'unknown' before
+reaching 'd', and a case that sends that sequence from here never really
+exercises _st_del. Finding from the round 3 review (the reviewer reverted
+_st_del to the version without confirmation and the case stayed 'OK', proof
+that it tested nothing). The second layer (the leftover REALLY reaching 'd',
+against a copy of the PRE-OAV2-25 engine) is the responsibility of
+'run_session_case' in tests/menu_ghost_pty.py, which now returns
+'FAIL:delete_prompt_leaked' precisely when that happens.
 
-ISOLAMENTO: cada caso sobe seu PRÓPRIO ORCHESTRA_STATE e projeto (tempdir,
-apagados no fim) — nunca o do processo que chama este script (mesma razão
-de tests/menu_ghost_pty.py).
+ISOLATION: each case spins up its OWN ORCHESTRA_STATE and project (tempdirs,
+deleted at the end), never those of the process calling this script (same
+reason as tests/menu_ghost_pty.py).
 
-BACKENDS FALSOS: agent_add recusa uma IA sem o binário no PATH
-(backend_available). Dentro de tests/smoke.sh isso já vem coberto (FAKEBIN
-no PATH antes de qualquer teste); para rodar este arquivo sozinho, ele sobe
-os mesmos stubs num tempdir próprio e antepõe ao PATH.
+FAKE BACKENDS: agent_add refuses an IA without the binary on PATH
+(backend_available). Inside tests/smoke.sh this is already covered (FAKEBIN
+on PATH before any test); to run this file alone, it creates the same stubs
+in a tempdir of its own and prepends it to PATH.
 
-Uso:  menu_compose_pty.py <ORCHESTRA_HOME>
-Imprime 'CASE:<name>=OK|FAIL:<motivo>' por caso e 'SESSION_ALIVE' no fim.
+Usage:  menu_compose_pty.py <ORCHESTRA_HOME>
+Prints 'CASE:<name>=OK|FAIL:<reason>' per case and 'SESSION_ALIVE' at the end.
 """
 
 import fcntl
@@ -56,30 +56,30 @@ import tempfile
 import termios
 import time
 
-# mesma janela curta de tests/menu_pty.py (é o scroll que dispara o bug de
-# duplicação do menu, ver o cabeçalho daquele arquivo) — medido: os cinco
-# casos abaixo passam em 14x90 tanto quanto passavam em 24x90, então não há
-# motivo para uma janela maior aqui.
+# same short window as tests/menu_pty.py (the scroll is what triggers the menu
+# duplication bug, see the header of that file). Measured: the five cases
+# below pass at 14x90 just as they did at 24x90, so there is no reason for
+# a larger window here.
 ROWS, COLS = 14, 90
 EXPECTED_AGENTS = ["coder", "reviewer"]
 
-# aparecem na tela sempre que _st_render desenha o menu (1º desenho da
-# subida, e todo redesenho depois de uma ação) — marcador de "voltou ao
-# laço principal", em vez de esperar por silêncio.
+# shown on screen whenever _st_render draws the menu (first draw on
+# startup, and every redraw after an action): a "back to the main loop"
+# marker, instead of waiting for silence.
 RENDER_MARK = "q sai sem abrir".encode("utf-8")
 PROMPT_NAME = "nome do agente".encode("utf-8")
 PROMPT_ROLE = "função — pronta".encode("utf-8")
 PROMPT_BACKEND = "qual IA roda esse agente".encode("utf-8")
 PROMPT_DESCRIPTION = "o que ele faz?".encode("utf-8")
 MARK_CANCELLED = "cancelado".encode("utf-8")
-# menu_confirm() (lib/menu.sh) sempre termina a pergunta com este sufixo,
-# independente do texto da pergunta em si.
+# menu_confirm() (lib/menu.sh) always ends the question with this suffix,
+# regardless of the question text itself.
 MARK_CONFIRM = "[s/N]".encode("utf-8")
 
 
 def _fake_backends():
-    """Stubs de claude/opencode/codex num tempdir próprio, para este arquivo
-    rodar sozinho sem depender do FAKEBIN que tests/smoke.sh já prepara."""
+    """claude/opencode/codex stubs in a tempdir of its own, so this file can
+    run alone without depending on the FAKEBIN that tests/smoke.sh prepares."""
     d = tempfile.mkdtemp()
     for b in ("claude", "opencode", "codex"):
         p = os.path.join(d, b)
@@ -90,7 +90,7 @@ def _fake_backends():
 
 
 def drain(fd, seconds=1.2, quiet=0.3):
-    """Lê do pty até ficar quieto por 'quiet's (ou estourar o prazo)."""
+    """Reads from the pty until it stays quiet for 'quiet's (or the deadline passes)."""
     buf, end = b"", time.time() + seconds
     while time.time() < end:
         ready, _, _ = select.select([fd], [], [], 0.1)
@@ -108,13 +108,13 @@ def drain(fd, seconds=1.2, quiet=0.3):
 
 
 def drain_until(fd, markers, deadline=8.0):
-    """Lê do pty até QUALQUER byte de 'markers' aparecer no acumulado, ou
-    estourar o prazo. Substitui esperar por SILÊNCIO: cada passo do fluxo de
-    'adicionar' tem um prompt de tela PRÓPRIO (nome → função → IA →
-    descrição → volta ao menu), e esperar pelo TEXTO daquele prompt em vez
-    de por um tempo fixo atravessa até o 'sleep 1' que _st_add faz ao
-    cancelar (lib/core.sh) sem precisar calibrar limiar nenhum — a mesma
-    técnica (e o mesmo motivo) de tests/menu_ghost_pty.py (OAV2-26)."""
+    """Reads from the pty until ANY of the 'markers' appears in the
+    accumulated output, or the deadline passes. Replaces waiting for SILENCE:
+    each step of the 'add' flow has its OWN on-screen prompt (name → role →
+    IA → description → back to the menu), and waiting for that prompt's TEXT
+    instead of a fixed time gets through even the 'sleep 1' that _st_add does
+    on cancel (lib/core.sh) with no threshold to calibrate: the same
+    technique (and the same reason) as tests/menu_ghost_pty.py (OAV2-26)."""
     buf, end = b"", time.time() + deadline
     while time.time() < end:
         ready, _, _ = select.select([fd], [], [], 0.1)
@@ -167,7 +167,7 @@ def _agent(team_file, name):
 
 
 class Session:
-    """Um select_team isolado, dirigido por pty. Cada caso cria a sua."""
+    """An isolated select_team, driven through a pty. Each case creates its own."""
 
     def __init__(self, home):
         self.proj = tempfile.mkdtemp()
@@ -190,8 +190,8 @@ class Session:
         self.output, self.found = drain_until(self.fd, [RENDER_MARK], deadline=8.0)
 
     def send(self, bts, markers=(RENDER_MARK,), deadline=8.0):
-        """Escreve bytes e espera por QUALQUER marcador da lista. Devolve o
-        marcador achado (ou None, se estourou o prazo)."""
+        """Writes bytes and waits for ANY marker in the list. Returns the
+        marker found (or None, if the deadline passed)."""
         os.write(self.fd, bts)
         chunk, found = drain_until(self.fd, list(markers), deadline)
         self.output += chunk
@@ -233,13 +233,13 @@ class Session:
 
 
 # ---------------------------------------------------------------------------
-# Casos
+# Cases
 # ---------------------------------------------------------------------------
 
 def case_add_full(home):
-    """'a' de ponta a ponta: nome, função (não-preset, então pede descrição),
-    IA e descrição — confirma o agente novo no team.json (role=custom,
-    prompt_file) E o conteúdo do prompt gerado."""
+    """'a' end to end: name, role (non-preset, so it asks for a description),
+    IA and description; confirms the new agent in team.json (role=custom,
+    prompt_file) AND the content of the generated prompt."""
     s = Session(home)
     try:
         if s.found != RENDER_MARK:
@@ -283,14 +283,14 @@ def case_add_full(home):
 
 
 def case_add_cancel(home):
-    """'a' com nome em branco: imprime 'cancelado' e NÃO cria agente nenhum."""
+    """'a' with a blank name: prints 'cancelado' and creates NO agent."""
     s = Session(home)
     try:
         if s.send(b"a", markers=(PROMPT_NAME,)) != PROMPT_NAME:
             return "FAIL:name_prompt_did_not_open"
-        # Enter sozinho = nome vazio. _st_add trata como cancelar, imprime
-        # 'cancelado', dorme 1s e só ENTÃO redesenha — RENDER_MARK atravessa
-        # esse sono sem depender de um limiar de tempo calibrado à mão.
+        # A lone Enter = empty name. _st_add treats it as cancel, prints
+        # 'cancelado', sleeps 1s and only THEN redraws; RENDER_MARK gets
+        # through that sleep without depending on a hand-calibrated time threshold.
         if s.send(b"\n", markers=(RENDER_MARK,), deadline=10.0) != RENDER_MARK:
             return "FAIL:did_not_return_to_menu"
         if MARK_CANCELLED not in s.output:
@@ -307,12 +307,12 @@ def case_add_cancel(home):
 
 
 def _delete_with_response(home, response):
-    """Sobe uma sessão própria, aperta 'd' na linha do coder e responde a
-    confirmação com 'response' (bytes). Devolve os nomes de agentes que
-    sobraram no team.json ao final, ou uma string 'FAIL:...'."""
+    """Spins up a session of its own, presses 'd' on the coder row and answers
+    the confirmation with 'response' (bytes). Returns the agent names left in
+    team.json at the end, or a 'FAIL:...' string."""
     s = Session(home)
     try:
-        if s.send(b"\x1b[B") != RENDER_MARK:                # líder -> coder
+        if s.send(b"\x1b[B") != RENDER_MARK:                # leader -> coder
             return "FAIL:did_not_move_down_to_coder"
         before = len(s.output)
         if s.send(b"d", markers=(MARK_CONFIRM,)) != MARK_CONFIRM:
@@ -332,13 +332,13 @@ def _delete_with_response(home, response):
 
 
 def case_delete_with_confirmation(home):
-    """'d' na linha do coder pede confirmação — nome do agente visível na
-    pergunta, default NÃO (lib/menu.sh menu_confirm). 'n' e Enter sozinho
-    preservam o time; só 's' remove (OAV2-27). Substitui o antigo
-    'del_sem_confirmacao': a remoção deixou de ser imediata."""
+    """'d' on the coder row asks for confirmation: agent name visible in the
+    question, default NO (lib/menu.sh menu_confirm). 'n' and a lone Enter
+    preserve the team; only 's' removes (OAV2-27). Replaces the old
+    'del_sem_confirmacao': removal is no longer immediate."""
     for response, expected, label in (
         (b"n\n", EXPECTED_AGENTS, "n_does_not_remove"),
-        (b"\n", EXPECTED_AGENTS, "enter_alone_does_not_remove"),  # default NÃO
+        (b"\n", EXPECTED_AGENTS, "enter_alone_does_not_remove"),  # default NO
         (b"s\n", ["reviewer"], "s_removes"),
     ):
         names = _delete_with_response(home, response)
@@ -350,13 +350,13 @@ def case_delete_with_confirmation(home):
 
 
 def case_space_does_not_persist_on_quit(home):
-    """Espaço troca a IA da linha em memória; saindo com 'q' (cancelamento),
-    a troca é DESCARTADA — team.json continua com o backend original."""
+    """Space switches the row's IA in memory; quitting with 'q' (cancel),
+    the switch is DISCARDED: team.json keeps the original backend."""
     s = Session(home)
     try:
-        if s.send(b"\x1b[B") != RENDER_MARK:               # líder -> coder
+        if s.send(b"\x1b[B") != RENDER_MARK:               # leader -> coder
             return "FAIL:did_not_move_down_to_coder"
-        if s.send(b" ") != RENDER_MARK:                    # cicla a IA
+        if s.send(b" ") != RENDER_MARK:                    # cycles the IA
             return "FAIL:did_not_redraw_after_space"
         s.close(b"q")
         if s.rc() != "2":
@@ -373,12 +373,12 @@ def case_space_does_not_persist_on_quit(home):
 
 
 def case_enter_persists(home):
-    """Espaço troca a IA, Enter NA LINHA (não em 'adicionar'/'sair') sai do
-    laço sem cancelar e persiste via team_replace — team.json reflete a
-    troca, e select_team devolve rc 0 (não 2)."""
+    """Space switches the IA, Enter ON THE ROW (not on 'adicionar'/'sair') leaves
+    the loop without cancelling and persists via team_replace: team.json
+    reflects the switch, and select_team returns rc 0 (not 2)."""
     s = Session(home)
     try:
-        if s.send(b"\x1b[B") != RENDER_MARK:               # líder -> coder
+        if s.send(b"\x1b[B") != RENDER_MARK:               # leader -> coder
             return "FAIL:did_not_move_down_to_coder"
         if s.send(b" ") != RENDER_MARK:                    # opencode -> codex
             return "FAIL:did_not_redraw_after_space"
@@ -411,7 +411,7 @@ def main():
     for name, fn in CASES:
         try:
             result = fn(home)
-        except Exception as exc:  # nunca deixar o roteiro morrer calado
+        except Exception as exc:  # never let the script die silently
             result = "FAIL:exception:%s" % exc
         print("CASE:%s=%s" % (name, result))
     print("SESSION_ALIVE")

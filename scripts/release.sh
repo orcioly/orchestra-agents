@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Gera uma nova versão automaticamente: calcula o número (semver), atualiza o
-# VERSION em bin/orchestra, faz commit, cria a tag, dá push e publica a release.
+# Generates a new version automatically: computes the number (semver), updates
+# VERSION in bin/orchestra, commits, creates the tag, pushes and publishes the release.
 #
-# uso:
-#   ./scripts/release.sh patch     # 0.1.0 -> 0.1.1   (padrão)
+# usage:
+#   ./scripts/release.sh patch     # 0.1.0 -> 0.1.1   (default)
 #   ./scripts/release.sh minor     # 0.1.0 -> 0.2.0
 #   ./scripts/release.sh major     # 0.1.0 -> 1.0.0
-#   ./scripts/release.sh 1.2.3     # versão explícita
-#   DRY_RUN=1 ./scripts/release.sh minor   # só mostra o que faria
+#   ./scripts/release.sh 1.2.3     # explicit version
+#   DRY_RUN=1 ./scripts/release.sh minor   # only shows what it would do
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -33,19 +33,19 @@ if [ "${DRY_RUN:-0}" = 1 ]; then
   exit 0
 fi
 
-# checagens de segurança
+# safety checks
 git diff --quiet && git diff --cached --quiet || { echo "✖ há mudanças não commitadas — limpe a árvore antes"; exit 1; }
 git rev-parse "$TAG" >/dev/null 2>&1 && { echo "✖ a tag $TAG já existe"; exit 1; }
 SKIP_DISPATCH=1 ./tests/smoke.sh >/dev/null 2>&1 || { echo "✖ smoke test falhou — corrija antes de lançar"; exit 1; }
 
-# bump da versão
+# version bump
 sed -i.bak "s/VERSION=\"$CUR\"/VERSION=\"$NEW\"/" bin/orchestra && rm -f bin/orchestra.bak
 git add bin/orchestra
 git commit -q -m "🔖 chore: bump version to $TAG"
 git tag -a "$TAG" -m "Orchestra Agents $TAG"
 git push origin main --follow-tags
 
-# release com notas geradas automaticamente a partir dos commits
+# release with notes generated automatically from the commits
 if command -v gh >/dev/null 2>&1 && gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes; then
   echo "✅ release $TAG publicada (notas geradas automaticamente)"
 else

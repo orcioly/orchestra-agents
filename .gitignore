@@ -1,5 +1,5 @@
-# estado de runtime (gerado em ~/.local/state/orchestra-agents normalmente)
-# e runtime dos agentes dentro de cada projeto (o team.json É versionável)
+# runtime state (normally generated in ~/.local/state/orchestra-agents)
+# and agent runtime inside each project (team.json IS versionable)
 .orchestra/run/
 *.session
 server.log
@@ -7,20 +7,20 @@ server.log
 run/
 state/
 
-# lixo comum
+# common junk
 *.log
 .DS_Store
 __pycache__/
 *.pyc
 
-# contexto local do Claude (não versionar)
+# local Claude context (do not version)
 CLAUDE.md
 CLAUDE.local.md
 .claude
 
-# Python bytecode cache (gerado ao importar merge_reviewer em testes)
+# Python bytecode cache (generated when importing merge_reviewer in tests)
 __pycache__/
 *.pyc
 
-# knowledge graph do graphify (gerado; os hooks post-checkout/post-commit reconstroem)
+# graphify knowledge graph (generated; the post-checkout/post-commit hooks rebuild it)
 graphify-out/

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Orchestra Agents — CLI do orquestrador
+# Orchestra Agents — orchestrator CLI
 set -uo pipefail
 ORCHESTRA_HOME="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
 
@@ -51,9 +51,9 @@ exemplos:
 EOF
 }
 
-# Subir o time é a ação PADRÃO: 'orchestra' (aqui) ou 'orchestra <dir>' (lá).
-# Não existe subcomando para isso — 'orchestra up' era redundante e confundia.
-# Continua aceito, sem estar documentado, para não quebrar quem já o usava.
+# Bringing the team up is the DEFAULT action: 'orchestra' (here) or 'orchestra <dir>' (there).
+# There is no subcommand for it — 'orchestra up' was redundant and confusing.
+# It is still accepted, undocumented, so as not to break anyone who already used it.
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 if [ "$cmd" = up ]; then
   echo "ℹ️  o 'up' não é mais necessário — basta 'orchestra' (ou 'orchestra <dir>')."
@@ -62,15 +62,15 @@ fi
 case "$cmd" in
   send|done|result|await|agents|team|ls|add|rm|remove|leader|heal|status|doctor|down|uninstall|version|-v|--version|help|-h|--help) ;;
   *)
-    # vazio ou um diretório existente => subir o time (fixa o projeto ANTES do core,
-    # que resolve os diretórios de runtime a partir dele)
+    # empty or an existing directory => bring the team up (pins the project BEFORE core,
+    # which resolves the runtime directories from it)
     if [ -z "$cmd" ] || [ -d "$cmd" ]; then
       proj="${cmd:-$PWD}"
       proj="$(cd "$proj" 2>/dev/null && pwd)" || { echo "❌ diretório inválido: '$cmd'"; exit 1; }
       export ORCHESTRA_PROJECT="$proj"
       cmd=__subir
     else
-      # parece caminho e não existe: dizer isso, em vez de "comando desconhecido"
+      # looks like a path and does not exist: say so, instead of "unknown command"
       case "$cmd" in
         /*|./*|../*|~*|*/*) echo "❌ diretório não encontrado: '$cmd'" >&2; exit 1 ;;
       esac
@@ -89,19 +89,19 @@ case "$cmd" in
       exit 1
     fi
     printf '%s' "$ORCHESTRA_PROJECT" >"$ORCHESTRA_STATE/project"
-    # tudo fora do projeto: nada de .gitignore, nada na raiz do usuário
+    # everything outside the project: no .gitignore, nothing in the user's root
     mkdir -p "$ORCHESTRA_RUN_DIR"
     echo "🎼 subindo Orchestra no projeto: $ORCHESTRA_PROJECT"
 
     team_ensure
-    # select_team devolve 2 quando o usuário escolhe "sair" no menu
+    # select_team returns 2 when the user picks "sair" (quit) in the menu
     select_team; sel_rc=$?
     if [ "$sel_rc" = 2 ]; then
       echo "  ✋ cancelado — o zellij não foi aberto."
       exit 0
     fi
 
-    # valida que todo backend escolhido está instalado
+    # checks that every chosen backend is installed
     miss=0
     for n in $(team_all_names); do
       b="$(team_field "$n" backend)"
@@ -109,7 +109,7 @@ case "$cmd" in
     done
     [ "$miss" = 0 ] || exit 1
 
-    # o OpenCode precisa do agente 'reviewer' configurado (idempotente)
+    # OpenCode needs the 'reviewer' agent configured (idempotent)
     for n in $(team_all_names); do
       [ "$(team_field "$n" backend)" = opencode ] && { ensure_reviewer_agent; break; }
     done
@@ -117,9 +117,9 @@ case "$cmd" in
     layout="$(generate_layout)"
     echo "  ✔ time: $(team_all_names | tr '\n' ' ')"
 
-    # nome de sessão estável por projeto → rodar 'orchestra' de novo reanexa em vez de
-    # falhar. A montagem vive em lib/mux.sh (é conceito de multiplexador) e encurta
-    # sozinha quando o zellij não aceita o nome inteiro — ver mux_session_name.
+    # stable session name per project → running 'orchestra' again reattaches instead of
+    # failing. Building it lives in lib/mux.sh (it is a multiplexer concept) and it shortens
+    # itself when zellij does not accept the full name — see mux_session_name.
     sess="$(mux_session_name "$ORCHESTRA_PROJECT")"
     printf '%s' "$sess" >"$ORCHESTRA_STATE/mux.session"
     line="$(zellij list-sessions --no-formatting 2>/dev/null | grep -E "^${sess}( |\$)" || true)"
@@ -130,9 +130,9 @@ case "$cmd" in
       esac
     fi
     echo "  🎬 abrindo o zellij…"
-    # '-n/--new-session-with-layout' e NÃO '--layout': combinado com '--session', o
-    # '--layout' significa "adicione este layout como aba à sessão EXISTENTE" e falha
-    # com "Session not found" quando ela ainda não existe. O '-n' sempre cria.
+    # '-n/--new-session-with-layout' and NOT '--layout': combined with '--session',
+    # '--layout' means "add this layout as a tab to the EXISTING session" and fails
+    # with "Session not found" when it does not exist yet. '-n' always creates.
     exec zellij -s "$sess" -n "$layout"
     ;;
 
@@ -151,8 +151,8 @@ case "$cmd" in
     ;;
 
   await)
-    # 1º argumento = agente; 2º (opcional) = timeout, que PRECISA ser numérico —
-    # um valor inválido é erro de validação (exit 1), nunca um default silencioso.
+    # 1st argument = agent; 2nd (optional) = timeout, which MUST be numeric —
+    # an invalid value is a validation error (exit 1), never a silent default.
     role="${1:-}"; timeout="${2:-$ORCHESTRA_TIMEOUT}"
     if [ $# -gt 2 ]; then
       echo "uso: orchestra await <agente> [timeout_segundos]" >&2; exit 1

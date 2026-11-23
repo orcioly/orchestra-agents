@@ -1,37 +1,37 @@
 #!/usr/bin/env bash
-# Orchestra Agents — camada de abstração do multiplexador de terminal.
+# Orchestra Agents — terminal multiplexer abstraction layer.
 #
-# TODO acesso ao zellij passa por aqui. É o que permite trocar o substrato
-# (zellij ↔ tmux) mexendo em UM arquivo, e é o que o smoke test substitui pelo
-# backend 'stub' para rodar em CI sem multiplexador.
+# ALL access to zellij goes through here. It is what allows swapping the substrate
+# (zellij ↔ tmux) by touching ONE file, and it is what the smoke test replaces with the
+# 'stub' backend to run in CI without a multiplexer.
 #
-# Contrato (implementar tudo isto ao portar para outro multiplexador):
-#   mux_backend                   → nome do backend ativo
-#   mux_available                 → 0 se o multiplexador está utilizável
-#   mux_session                   → nome da sessão do multiplexador
-#   mux_session_name <projeto>    → nome de sessão estável que CABE neste mux
-#   mux_pane_id <agente>          → ecoa o pane-id do agente ("" se não existe)
-#   mux_pane_alive <pane>         → 0 se o pane existe
-#   mux_send_text <pane> <texto>  → injeta texto (multilinha, sem submeter)
-#   mux_enter <pane>              → submete (Enter)
-#   mux_capture <pane>            → ecoa o conteúdo visível+scrollback do pane
-#   mux_new_pane <agente> [dir]   → cria o painel do agente e ecoa o pane-id
-#   mux_kill_pane <pane>          → fecha o pane
+# Contract (implement all of this when porting to another multiplexer):
+#   mux_backend                   → name of the active backend
+#   mux_available                 → 0 if the multiplexer is usable
+#   mux_session                   → name of the multiplexer session
+#   mux_session_name <project>    → stable session name that FITS this mux
+#   mux_pane_id <agent>           → echoes the agent's pane-id ("" if it does not exist)
+#   mux_pane_alive <pane>         → 0 if the pane exists
+#   mux_send_text <pane> <text>   → injects text (multiline, without submitting)
+#   mux_enter <pane>              → submits (Enter)
+#   mux_capture <pane>            → echoes the pane's visible content + scrollback
+#   mux_new_pane <agent> [dir]    → creates the agent's pane and echoes the pane-id
+#   mux_kill_pane <pane>          → closes the pane
 #
-# Não executar diretamente; é "sourced" pelo lib/core.sh.
+# Do not execute directly; it is sourced by lib/core.sh.
 
-# backend: zellij (padrão) | stub (testes)
+# backend: zellij (default) | stub (tests)
 ORCHESTRA_MUX="${ORCHESTRA_MUX:-zellij}"
 
 mux_backend() { echo "$ORCHESTRA_MUX"; }
 
 # ---------------------------------------------------------------------------
-# helpers comuns
+# common helpers
 # ---------------------------------------------------------------------------
 
-# diretório de runtime dos agentes (definido por core.sh; fallback defensivo).
-# Fica FORA do projeto: $ORCHESTRA_STATE/projects/<slug>/run — a raiz do projeto do
-# usuário não recebe nenhum arquivo do Orchestra.
+# agents' runtime directory (defined by core.sh; defensive fallback).
+# It lives OUTSIDE the project: $ORCHESTRA_STATE/projects/<slug>/run — the root of the
+# user's project receives no Orchestra file.
 _mux_run_dir() {
   if [ -n "${ORCHESTRA_RUN_DIR:-}" ]; then echo "$ORCHESTRA_RUN_DIR"; return; fi
   local p slug hash
@@ -44,44 +44,44 @@ _mux_run_dir() {
 
 _mux_pane_file() { echo "$(_mux_run_dir)/${1}.pane"; }
 
-# comando que identifica o painel de um agente (usado para re-resolver o pane-id).
-# Casamos pelo COMANDO e não pelo título: as TUIs (opencode/claude/codex) trocam o
-# título do terminal via OSC, então o título não é estável — o comando é.
+# command that identifies an agent's pane (used to re-resolve the pane-id).
+# We match by COMMAND and not by title: the TUIs (opencode/claude/codex) change the
+# terminal title via OSC, so the title is not stable — the command is.
 _mux_agent_cmd_marker() { echo "run-agent.sh $1"; }
 
-# Um candidato de nome encurtado. Cortar o slug num tamanho fixo pode deixá-lo
-# terminando em hífen ('meu-projeto' cortado em 4 vira 'meu-'), o que produziria
-# 'orchestra-meu--123': aparamos o hífen, e se não sobrar slug o nome fica só com o
+# A shortened name candidate. Cutting the slug at a fixed size can leave it
+# ending in a hyphen ('meu-projeto' cut at 4 becomes 'meu-'), which would produce
+# 'orchestra-meu--123': we trim the hyphen, and if no slug is left the name keeps only the
 # checksum.
-_mux_session_cand() { # $1 slug cortado  $2 hash curto
+_mux_session_cand() { # $1 cut slug  $2 short hash
   local v="$1"
   while [ -n "$v" ] && [ "${v%-}" != "$v" ]; do v="${v%-}"; done
   if [ -n "$v" ]; then printf '%s\n' "orchestra-${v}-${2}"
   else                 printf '%s\n' "orchestra-${2}"; fi
 }
 
-# Candidatos a nome de sessão de um projeto, do mais legível ao mais curto, um por
-# linha. É PURO (não encosta no multiplexador) — o smoke test exercita esta função
-# direto, sem zellij.
+# Candidate session names for a project, from the most readable to the shortest, one per
+# line. It is PURE (does not touch the multiplexer) — the smoke test exercises this function
+# directly, without zellij.
 #
-# Existe encurtamento porque o tamanho do nome NÃO é livre: o zellij o deriva do que
-# sobra em 'sockaddr_un.sun_path' (104 bytes no macOS, 108 no Linux) depois do
-# diretório do socket, que fica sob $TMPDIR. No Linux $TMPDIR é /tmp e o nome inteiro
-# cabe; no macOS é /var/folders/<...>/T/ (49 chars) e sobram 24.
+# Shortening exists because the name length is NOT free: zellij derives it from what
+# is left in 'sockaddr_un.sun_path' (104 bytes on macOS, 108 on Linux) after the
+# socket directory, which lives under $TMPDIR. On Linux $TMPDIR is /tmp and the whole name
+# fits; on macOS it is /var/folders/<...>/T/ (49 chars) and 24 are left.
 #
-# O prefixo 'orchestra-' vai em TODOS os candidatos: 'kill_all_sessions' (lib/core.sh)
-# acha as sessões do time com grep '^orchestra-'. NÃO remover o prefixo ao encurtar.
-_mux_session_candidates() { # $1 projeto
+# The 'orchestra-' prefix goes in ALL candidates: 'kill_all_sessions' (lib/core.sh)
+# finds the team's sessions with grep '^orchestra-'. Do NOT remove the prefix when shortening.
+_mux_session_candidates() { # $1 project
   local proj="${1:-$PWD}" slug hash short
-  # printf (e não o pipe direto do basename): 'tr -c' converteria o \n final em '-',
-  # deixando o nome com hífen duplo antes do checksum.
+  # printf (and not piping basename directly): 'tr -c' would convert the trailing \n into '-',
+  # leaving the name with a double hyphen before the checksum.
   slug="$(printf '%s' "$(basename "$proj")" | tr -c 'a-zA-Z0-9_-' '-')"
   hash="$(printf '%s' "$proj" | cksum | cut -d' ' -f1)"
-  # Projeto que já começa com 'orchestra-' não repete a palavra no nome curto:
-  # 'orchestra-agents' viraria 'orchestra-orchestr-60767', que além de feio perde
-  # justamente a parte que identifica o projeto. Vira 'orchestra-agents-60767'.
+  # A project that already starts with 'orchestra-' does not repeat the word in the short name:
+  # 'orchestra-agents' would become 'orchestra-orchestr-60767', which besides being ugly loses
+  # precisely the part that identifies the project. It becomes 'orchestra-agents-60767'.
   short="${slug#orchestra-}"
-  # O 1º é o formato histórico: enquanto ele couber (Linux), nada muda de nome.
+  # The 1st is the historical format: as long as it fits (Linux), the name does not change.
   printf '%s\n' "orchestra-${slug}-${hash}"
   _mux_session_cand "${short:0:8}" "${hash: -5}"
   _mux_session_cand "${short:0:4}" "${hash: -5}"
@@ -92,8 +92,8 @@ _mux_session_candidates() { # $1 projeto
 # backend: zellij
 # ---------------------------------------------------------------------------
 
-# nome da sessão zellij: preferimos a do ambiente (estamos dentro de um painel),
-# senão a registrada ao subir o time.
+# zellij session name: we prefer the one from the environment (we are inside a pane),
+# otherwise the one registered when the team came up.
 _zj_session() {
   if [ -n "${ZELLIJ_SESSION_NAME:-}" ]; then echo "$ZELLIJ_SESSION_NAME"; return 0; fi
   local s; s="$(cat "$ORCHESTRA_STATE/mux.session" 2>/dev/null)"
@@ -101,30 +101,30 @@ _zj_session() {
   echo "$s"
 }
 
-# O zellij aceita este nome de sessão? Sondagem barata (~25ms, medido): 'list-panes'
-# numa sessão inexistente responde "There is no active session!", enquanto um nome
-# comprido demais nem chega ao servidor — o parser recusa com "error: invalid value".
-# Qualquer outra falha conta como "cabe": é o comportamento de hoje, e o erro real do
-# zellij aparece na hora de subir, em vez de o nome ser encurtado à toa.
+# Does zellij accept this session name? Cheap probe (~25ms, measured): 'list-panes'
+# on a nonexistent session answers "There is no active session!", whereas a name that is
+# too long does not even reach the server — the parser refuses with "error: invalid value".
+# Any other failure counts as "fits": that is today's behavior, and zellij's real error
+# shows up when starting, instead of the name being shortened for nothing.
 #
-# A saída é capturada em variável em vez de passada por 'grep': o 'up' roda sob
-# 'set -o pipefail', e num pipe o exit do zellij (2, quando recusa o nome) VENCE o do
-# grep que acabou de casar — o teste dava "cabe" justamente para o nome grande demais,
-# que é o caso que ele existe para pegar. NÃO reintroduzir o pipe aqui.
-_zj_session_name_fits() { # $1 nome
+# The output is captured in a variable instead of going through 'grep': 'up' runs under
+# 'set -o pipefail', and in a pipe zellij's exit (2, when it refuses the name) WINS over that of the
+# grep that just matched — the test answered "fits" precisely for the name that is too big,
+# which is the case it exists to catch. Do NOT reintroduce the pipe here.
+_zj_session_name_fits() { # $1 name
   local out
   out="$(zellij -s "$1" action list-panes -j 2>&1)"
   case "$out" in *'invalid value'*) return 1 ;; esac
   return 0
 }
 
-# wrapper de 'zellij action' já mirando a sessão certa
+# wrapper for 'zellij action' already targeting the right session
 _zj() {
   local s; s="$(_zj_session)" || { echo "❌ sessão do zellij desconhecida (rode 'orchestra')" >&2; return 1; }
   zellij -s "$s" action "$@"
 }
 
-# JSON dos painéis não-plugin da sessão
+# JSON of the session's non-plugin panes
 _zj_panes_json() { _zj list-panes -a -j 2>/dev/null; }
 
 _zj_available() {
@@ -133,8 +133,8 @@ _zj_available() {
   _zj list-panes -j >/dev/null 2>&1
 }
 
-# procura o pane-id de um agente varrendo os painéis pelo comando em execução
-_zj_find_pane() { # $1 agente
+# finds an agent's pane-id by scanning the panes for the running command
+_zj_find_pane() { # $1 agent
   local marker; marker="$(_mux_agent_cmd_marker "$1")"
   _zj_panes_json | python3 -c "
 import sys, json, re
@@ -154,7 +154,7 @@ for p in panes:
 " "$marker" 2>/dev/null
 }
 
-# aba (tab_id) onde vive um painel — usada para ancorar painéis novos na MESMA tela
+# tab (tab_id) where a pane lives — used to anchor new panes on the SAME screen
 _zj_tab_of() { # $1 pane-id
   local want="${1#terminal_}"
   _zj_panes_json | python3 -c "
@@ -173,7 +173,7 @@ for p in panes:
 " "$want" 2>/dev/null
 }
 
-# painel em foco numa aba (para devolver o foco depois de dividir)
+# focused pane in a tab (to give focus back after splitting)
 _zj_focused_pane() { # $1 tab_id
   _zj_panes_json | python3 -c "
 import sys, json
@@ -188,9 +188,9 @@ for p in panes:
 " "$1" 2>/dev/null
 }
 
-# maior painel da aba, EXCLUINDO o do líder — é ele que será dividido para abrir
-# espaço ao agente novo, para o painel do líder não encolher a cada 'add'.
-_zj_biggest_other_pane() { # $1 tab_id  $2 pane-id a excluir
+# biggest pane of the tab, EXCLUDING the leader's — it is the one that will be split to open
+# room for the new agent, so the leader's pane does not shrink on every 'add'.
+_zj_biggest_other_pane() { # $1 tab_id  $2 pane-id to exclude
   _zj_panes_json | python3 -c "
 import sys, json
 tab, skip = int(sys.argv[1]), sys.argv[2].replace('terminal_', '')
@@ -208,15 +208,15 @@ for p in panes:
     if best is None or area > best[0]:
         best = (area, p['id'], p.get('pane_columns') or 0, p.get('pane_rows') or 0)
 if best:
-    # painel largo divide na horizontal (novo embaixo); painel alto divide na vertical
+    # a wide pane splits horizontally (new one below); a tall pane splits vertically
     print('terminal_%s %s' % (best[1], 'down' if best[2] >= best[3] * 2 else 'right'))
 " "$1" "$2" 2>/dev/null
 }
 
-# Move o foco até um painel alvo, CICLANDO com 'focus-next-pane'.
-# 'focus-pane-id' NÃO funciona quando chamado de fora da sessão (zellij 0.44.3):
-# retorna 0 e não move o foco. 'focus-next-pane' funciona — verificado.
-_zj_focus_pane() { # $1 tab_id  $2 pane-id alvo
+# Moves focus to a target pane, CYCLING with 'focus-next-pane'.
+# 'focus-pane-id' does NOT work when called from outside the session (zellij 0.44.3):
+# it returns 0 and does not move focus. 'focus-next-pane' works — verified.
+_zj_focus_pane() { # $1 tab_id  $2 target pane-id
   local i cur
   for i in $(seq 1 12); do
     cur="$(_zj_focused_pane "$1")"
@@ -244,7 +244,7 @@ raise SystemExit(1)
 }
 
 # ---------------------------------------------------------------------------
-# API pública
+# Public API
 # ---------------------------------------------------------------------------
 
 mux_available() {
@@ -262,10 +262,10 @@ mux_session() {
   esac
 }
 
-# Nome de sessão estável por projeto, já garantido caber neste multiplexador. Tenta os
-# candidatos do mais legível ao mais curto e devolve o primeiro aceito — no Linux o
-# primeiro passa e o nome é exatamente o de sempre.
-mux_session_name() { # $1 projeto
+# Stable session name per project, already guaranteed to fit this multiplexer. Tries the
+# candidates from the most readable to the shortest and returns the first accepted — on Linux the
+# first one passes and the name is exactly the usual one.
+mux_session_name() { # $1 project
   local proj="${1:-$PWD}" cand last=""
   case "$ORCHESTRA_MUX" in
     stub) echo "stub"; return 0 ;;
@@ -275,17 +275,17 @@ mux_session_name() { # $1 projeto
     last="$cand"
     if _zj_session_name_fits "$cand"; then echo "$cand"; return 0; fi
   done < <(_mux_session_candidates "$proj")
-  # Nenhum coube: devolve o mais curto e explica, em vez de morrer no erro cru do
-  # zellij ("session name must be less than 0 characters", que não diz nada).
+  # None fit: returns the shortest and explains, instead of dying with zellij's raw
+  # error ("session name must be less than 0 characters", which says nothing).
   echo "⚠️  o zellij recusou até o nome curto de sessão: o socket sob" >&2
   echo "   \$TMPDIR (${TMPDIR:-/tmp}) não deixa espaço. Tente 'TMPDIR=/tmp orchestra'." >&2
   echo "$last"
 }
 
-# ecoa o pane-id do agente, revalidando o valor salvo. Se o painel sumiu (usuário
-# fechou, matou o supervisor), o cache é descartado e tentamos localizar de novo
-# pelo comando — é isto que sobrevive a mover painel, trocar de aba e reiniciar.
-mux_pane_id() { # $1 agente
+# echoes the agent's pane-id, revalidating the saved value. If the pane is gone (user
+# closed it, killed the supervisor), the cache is discarded and we try to locate it again
+# by command — this is what survives moving a pane, switching tabs and restarting.
+mux_pane_id() { # $1 agent
   local agent="$1" f cached found
   f="$(_mux_pane_file "$agent")"
   case "$ORCHESTRA_MUX" in
@@ -310,14 +310,14 @@ mux_pane_alive() { # $1 pane-id
   esac
 }
 
-mux_send_text() { # $1 pane-id  $2 texto (pode ser multilinha)
+mux_send_text() { # $1 pane-id  $2 text (may be multiline)
   case "$ORCHESTRA_MUX" in
     stub)
       mkdir -p "$(_mux_run_dir)"
       printf '%s' "$2" >>"$(_mux_run_dir)/${1#stub_}.tx" ;;
     zellij)
-      # 'paste' usa bracketed paste: a TUI recebe o bloco inteiro como colagem,
-      # sem interpretar os \n como submissão. Validado no zellij 0.44.3.
+      # 'paste' uses bracketed paste: the TUI receives the whole block as a paste,
+      # without interpreting the \n as submission. Validated on zellij 0.44.3.
       _zj paste -p "$1" "$2" ;;
   esac
 }
@@ -331,38 +331,38 @@ mux_enter() { # $1 pane-id
   esac
 }
 
-mux_capture() { # $1 pane-id  → conteúdo do painel (viewport + scrollback)
+mux_capture() { # $1 pane-id  → pane content (viewport + scrollback)
   case "$ORCHESTRA_MUX" in
     stub)   cat "$(_mux_run_dir)/${1#stub_}.tx" 2>/dev/null ;;
     zellij) _zj dump-screen -p "$1" --full 2>/dev/null ;;
   esac
 }
 
-# cria o painel de um agente e ecoa o pane-id. Usado pelo 'add' e pela auto-cura.
-mux_new_pane() { # $1 agente  [$2 dir]
+# creates an agent's pane and echoes the pane-id. Used by 'add' and by self-healing.
+mux_new_pane() { # $1 agent  [$2 dir]
   local agent="$1" dir="${2:-}" id
   case "$ORCHESTRA_MUX" in
     stub) mkdir -p "$(_mux_run_dir)"
           printf 'stub_%s' "$agent" >"$(_mux_pane_file "$agent")"; printf 'stub_%s' "$agent"; return 0 ;;
   esac
-  # mesmo rótulo do layout gerado — um agente criado na hora não pode destoar
+  # same label as the generated layout — an agent created on the spot must not clash
   local label; label="$(pane_label "$agent" 2>/dev/null)"; [ -n "$label" ] || label="$agent"
   local args=(new-pane -n "$label")
-  # O painel do time SEMPRE nasce na mesma tela dos outros:
-  #  - '--tab-id' da aba do líder: sem isto o zellij usa a aba em FOCO, e o agente
-  #    apareceria numa aba diferente (fora da vista) se o usuário tivesse trocado.
-  #  - NUNCA '-f/--floating': painel flutuante cobre os outros em vez de dividir a tela.
-  #  - sem '-d/--direction': o zellij escolhe o maior espaço livre, o que evita
-  #    espremer o painel de quem estiver em foco (tipicamente o líder).
+  # A team pane ALWAYS comes up on the same screen as the others:
+  #  - '--tab-id' of the leader's tab: without it zellij uses the FOCUSED tab, and the agent
+  #    would appear in a different tab (out of view) if the user had switched.
+  #  - NEVER '-f/--floating': a floating pane covers the others instead of splitting the screen.
+  #  - without '-d/--direction': zellij picks the biggest free space, which avoids
+  #    squeezing the pane of whoever is focused (typically the leader).
   local anchor tab=""
   if [ "$agent" != leader ]; then
     anchor="$(mux_pane_id leader 2>/dev/null)"
     [ -n "$anchor" ] && tab="$(_zj_tab_of "$anchor")"
   fi
   [ -n "$tab" ] && args+=(--tab-id "$tab")
-  # Sem direção o zellij divide o MAIOR painel — que costuma ser o do líder, que
-  # então encolhe a cada agente novo. Focamos o maior painel de worker e dividimos
-  # ELE, devolvendo o foco em seguida.
+  # Without a direction zellij splits the BIGGEST pane — which tends to be the leader's, which
+  # then shrinks with every new agent. We focus the biggest worker pane and split
+  # IT, giving focus back afterwards.
   local prev="" split="" target="" sdir=""
   if [ -n "$tab" ] && [ -n "$anchor" ]; then
     split="$(_zj_biggest_other_pane "$tab" "$anchor")"
@@ -372,14 +372,14 @@ mux_new_pane() { # $1 agente  [$2 dir]
       if [ "$prev" = "$target" ] || _zj_focus_pane "$tab" "$target"; then
         args+=(-d "$sdir")
       else
-        prev=""   # não conseguiu mirar: deixa o zellij escolher o espaço
+        prev=""   # could not target: let zellij pick the space
       fi
     fi
   fi
   [ -n "$dir" ] && args+=(--cwd "$dir")
   args+=(-- bash -lc "exec '$ORCHESTRA_HOME/agents/run-agent.sh' '$agent'")
   id="$(_zj "${args[@]}" 2>/dev/null | tr -d '[:space:]')"
-  # devolve o foco para onde estava (o painel novo nasce focado)
+  # gives focus back to where it was (the new pane comes up focused)
   [ -n "$prev" ] && [ -n "$tab" ] && _zj_focus_pane "$tab" "$prev" >/dev/null 2>&1
   [ -n "$id" ] || return 1
   mkdir -p "$(_mux_run_dir)"; printf '%s' "$id" >"$(_mux_pane_file "$agent")"
@@ -390,15 +390,15 @@ mux_kill_pane() { # $1 pane-id
   case "$ORCHESTRA_MUX" in
     stub)   return 0 ;;
     zellij)
-      # 'close-pane -p <id>' fecha o painel ALVO sem mexer no foco. NÃO usar
-      # 'focus-pane-id + close-pane': se o focus falhar, fecha o painel em foco —
-      # que pode ser o do líder. Ao fechar, o zellij redistribui o espaço entre os
-      # painéis restantes sozinho.
+      # 'close-pane -p <id>' closes the TARGET pane without touching focus. Do NOT use
+      # 'focus-pane-id + close-pane': if the focus fails, it closes the focused pane —
+      # which may be the leader's. On closing, zellij redistributes the space among the
+      # remaining panes on its own.
       _zj close-pane -p "$1" >/dev/null 2>&1 ;;
   esac
 }
 
-# registra a sessão do multiplexador (chamado no 'up' e pelo run-agent.sh)
+# registers the multiplexer session (called in 'up' and by run-agent.sh)
 mux_remember_session() {
   [ "$ORCHESTRA_MUX" = zellij ] || return 0
   [ -n "${ZELLIJ_SESSION_NAME:-}" ] || return 0

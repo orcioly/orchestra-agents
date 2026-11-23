@@ -1,9 +1,9 @@
 {
-  // Trecho de referência para ~/.config/opencode/opencode.jsonc
-  // O Orchestra precisa de um agente "reviewer" (read-only) no OpenCode.
-  // Observação: NÃO é obrigatório fixar "model" — sem ele, o agente usa o
-  // modelo default que você já configurou no OpenCode. Adicione "model" só
-  // se quiser que o revisor use um modelo diferente do padrão.
+  // Reference snippet for ~/.config/opencode/opencode.jsonc
+  // Orchestra needs a "reviewer" (read-only) agent in OpenCode.
+  // Note: pinning "model" is NOT required — without it, the agent uses the
+  // default model you already configured in OpenCode. Add "model" only
+  // if you want the reviewer to use a model different from the default.
   "$schema": "https://opencode.ai/config.json",
   "agent": {
     "reviewer": {

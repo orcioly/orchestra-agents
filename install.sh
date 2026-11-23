@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Orchestra Agents — instalador
-# Uso:
+# Orchestra Agents — installer
+# Usage:
 #   curl -fsSL https://raw.githubusercontent.com/orcioly/orchestra-agents/main/install.sh | bash
 #
-# Pré-requisitos do desenvolvedor: Claude Code e OpenCode já instalados e configurados.
-# O zellij é instalado automaticamente se faltar.
+# Developer prerequisites: Claude Code and OpenCode already installed and configured.
+# zellij is installed automatically if missing.
 set -euo pipefail
 
-# ----- parâmetros (sobrescrevíveis por env) -----
+# ----- parameters (overridable by env) -----
 REPO_USER="${ORCHESTRA_REPO_USER:-orcioly}"
 REPO_NAME="${ORCHESTRA_REPO_NAME:-orchestra-agents}"
 REPO_BRANCH="${ORCHESTRA_REPO_BRANCH:-main}"
 REPO_URL="${ORCHESTRA_REPO_URL:-https://github.com/${REPO_USER}/${REPO_NAME}.git}"
 INSTALL_DIR="${ORCHESTRA_HOME:-$HOME/.orchestra-agents}"
 STATE_DIR="${ORCHESTRA_STATE:-$HOME/.local/state/orchestra-agents}"
-BIN_DIR="${ORCHESTRA_BIN:-}"   # resolvido automaticamente após checar pré-requisitos
+BIN_DIR="${ORCHESTRA_BIN:-}"   # resolved automatically after checking prerequisites
 
 c_say(){ printf '\033[1;36m▶ %s\033[0m\n' "$*"; }
 c_ok(){  printf '\033[1;32m✔ %s\033[0m\n' "$*"; }
@@ -23,44 +23,44 @@ c_err(){ printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 in_path(){ case ":$PATH:" in *":$1:"*) return 0;; *) return 1;; esac; }
 
-# Resolve o caminho do config do OpenCode respeitando overrides do próprio OpenCode,
-# para escrever na pasta CERTA (não quebrar quem usa XDG_CONFIG_HOME ou OPENCODE_CONFIG).
+# Resolves the OpenCode config path honoring OpenCode's own overrides,
+# to write to the RIGHT folder (not break anyone using XDG_CONFIG_HOME or OPENCODE_CONFIG).
 oc_config_path() {
   if [ -n "${OPENCODE_CONFIG:-}" ]; then echo "$OPENCODE_CONFIG"; return; fi
   local dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
   [ -f "$dir/opencode.jsonc" ] && { echo "$dir/opencode.jsonc"; return; }
   [ -f "$dir/opencode.json" ]  && { echo "$dir/opencode.json";  return; }
-  echo "$dir/opencode.jsonc"   # default a criar
+  echo "$dir/opencode.jsonc"   # default to create
 }
 
-# Escolhe um diretório de instalação do CLI que JÁ esteja no PATH e seja gravável,
-# para que 'orchestra' funcione na mesma sessão, sem configuração manual.
-# (o instalador roda via 'curl | bash' herdando o PATH real do usuário)
+# Picks a CLI install directory that is ALREADY on the PATH and writable,
+# so that 'orchestra' works in the same session, with no manual setup.
+# (the installer runs via 'curl | bash', inheriting the user's real PATH)
 pick_bindir() {
   local d c p dd
-  # 1) preferidos, se já no PATH e graváveis
+  # 1) preferred ones, if already on the PATH and writable
   for d in "$HOME/.local/bin" "$HOME/bin"; do
     [ -d "$d" ] && [ -w "$d" ] && in_path "$d" && { echo "$d"; return; }
   done
-  # 2) diretório de um pré-requisito (garantidamente no PATH) e gravável
+  # 2) a prerequisite's directory (guaranteed to be on the PATH) and writable
   for c in opencode claude zellij; do
     p="$(command -v "$c" 2>/dev/null)" || continue
     dd="$(cd "$(dirname "$p")" 2>/dev/null && pwd)" || continue
     in_path "$dd" && [ -w "$dd" ] && { echo "$dd"; return; }
   done
-  # 3) qualquer diretório do PATH gravável dentro do HOME
+  # 3) any writable PATH directory inside HOME
   local IFSorig="$IFS"; IFS=:
   for d in $PATH; do
     case "$d" in "$HOME"/*) if [ -w "$d" ]; then echo "$d"; IFS="$IFSorig"; return; fi;; esac
   done
   IFS="$IFSorig"
-  # 4) fallback: ~/.local/bin (será adicionado ao PATH via rc)
+  # 4) fallback: ~/.local/bin (will be added to the PATH via rc)
   echo "$HOME/.local/bin"
 }
 
 printf '\n\033[1;35m🎼 Orchestra Agents — instalador\033[0m\n\n'
 
-# 1) pré-requisitos obrigatórios
+# 1) mandatory prerequisites
 c_say "Verificando pré-requisitos..."
 miss=0
 have git    || { c_err "git é necessário"; miss=1; }
@@ -68,8 +68,8 @@ have curl   || { c_err "curl é necessário"; miss=1; }
 have python3|| { c_err "python3 é necessário"; miss=1; }
 [ "$miss" = 1 ] && { c_err "Resolva os itens acima e rode novamente."; exit 1; }
 
-# Backends de agente: basta UM. Cada agente do time escolhe o seu no 'orchestra up',
-# então um time inteiro de Claude Code (ou de Codex) é perfeitamente válido.
+# Agent backends: just ONE is enough. Each team agent picks its own in 'orchestra up',
+# so a whole team of Claude Code (or of Codex) is perfectly valid.
 backends=0
 if have claude; then
   c_ok "Claude Code presente — disponível para qualquer agente."; backends=$((backends+1))
@@ -91,21 +91,21 @@ if [ "$backends" = 0 ]; then
   exit 1
 fi
 
-# resolve onde instalar o CLI (diretório já no PATH, sempre que possível)
+# resolves where to install the CLI (a directory already on the PATH, whenever possible)
 [ -n "$BIN_DIR" ] || BIN_DIR="$(pick_bindir)"
 mkdir -p "$BIN_DIR"
 
-# ----- manifesto do que o INSTALADOR pôs na máquina -----
-# Uma linha por item: "<método><TAB><alvo>", método em file|brew|cargo. O uninstall
-# lê isto e desfaz cada item COM O MÉTODO CERTO — um zellij vindo do brew sai com
-# 'brew uninstall', um binário baixado sai com 'rm'.
+# ----- manifest of what the INSTALLER put on the machine -----
+# One line per item: "<method><TAB><target>", method in file|brew|cargo. The uninstall
+# reads this and undoes each item WITH THE RIGHT METHOD — a zellij that came from brew leaves
+# with 'brew uninstall', a downloaded binary leaves with 'rm'.
 #
-# Só entra aqui o que NÓS instalamos. O que já existia na máquina nunca é registrado
-# e portanto nunca é removido: desinstalar o Orchestra não pode levar junto o zellij
-# de quem já usava zellij antes.
-# Sistema operacional: decide COMO instalar (e, gravado no manifesto, ajuda o
-# uninstall a saber em que máquina o instalador rodou). 'wsl' é Linux para efeito
-# de binário, mas é útil distinguir no diagnóstico.
+# Only what WE installed goes in here. What already existed on the machine is never recorded
+# and therefore never removed: uninstalling Orchestra must not take along the zellij
+# of someone who already used zellij before.
+# Operating system: decides HOW to install (and, recorded in the manifest, helps the
+# uninstall know what machine the installer ran on). 'wsl' is Linux for the purposes
+# of the binary, but it is useful to tell apart in diagnostics.
 os_detect(){
   case "$(uname -s 2>/dev/null)" in
     Darwin) echo macos ;;
@@ -118,14 +118,14 @@ os_detect(){
 ORCHESTRA_OS="$(os_detect)"
 
 MANIFEST="$STATE_DIR/installed.manifest"
-record_installed(){ # $1 método  $2 alvo
+record_installed(){ # $1 method  $2 target
   mkdir -p "$STATE_DIR" 2>/dev/null || return 0
   local line; line="$(printf '%s\t%s' "$1" "$2")"
   grep -qxF "$line" "$MANIFEST" 2>/dev/null && return 0
   printf '%s\n' "$line" >>"$MANIFEST"
 }
 
-# 2) zellij (instala por padrão se faltar)
+# 2) zellij (installed by default if missing)
 _zellij_from_brew(){
   have brew || return 1
   brew install zellij || { c_warn "'brew install zellij' falhou — tentando o binário oficial"; return 1; }
@@ -135,9 +135,9 @@ _zellij_from_brew(){
 install_zellij(){
   c_say "Instalando zellij ($ORCHESTRA_OS)..."
   local arch target tmp url
-  # No macOS o brew é o gerenciador nativo e vem primeiro. No Linux o caminho
-  # padrão é o binário musl do release: lá o brew normalmente NÃO existe, e exigi-lo
-  # deixaria o instalador sem saída na máquina mais comum.
+  # On macOS brew is the native manager and comes first. On Linux the default path
+  # is the release's musl binary: brew normally does NOT exist there, and requiring it
+  # would leave the installer with no way out on the most common machine.
   if [ "$ORCHESTRA_OS" = macos ] && _zellij_from_brew; then return 0; fi
   arch="$(uname -m)"
   case "$arch" in x86_64|amd64) arch=x86_64;; aarch64|arm64) arch=aarch64;; esac
@@ -153,7 +153,7 @@ install_zellij(){
       mkdir -p "$BIN_DIR"
       install -m 0755 "$tmp/zellij" "$BIN_DIR/zellij"
       record_installed file "$BIN_DIR/zellij"
-      # marcador antigo, mantido para quem desinstalar com um uninstall.sh anterior
+      # old marker, kept for anyone uninstalling with an earlier uninstall.sh
       printf '%s' "$BIN_DIR/zellij" >"$STATE_DIR/zellij.ours" 2>/dev/null || true
       rm -rf "$tmp"
       return 0
@@ -161,9 +161,9 @@ install_zellij(){
     rm -rf "$tmp"
     c_warn "download do binário do zellij falhou — tentando compilar com cargo"
   fi
-  # brew fora do macOS (linuxbrew), só depois do binário
+  # brew outside macOS (linuxbrew), only after the binary
   if [ "$ORCHESTRA_OS" != macos ] && _zellij_from_brew; then return 0; fi
-  # cargo por último: compila do zero (lento), mas cobre arquitetura sem release
+  # cargo last: compiles from scratch (slow), but covers architectures without a release
   if have cargo; then
     if cargo install zellij; then record_installed cargo zellij; return 0; fi
   fi
@@ -180,15 +180,15 @@ else
   fi
 fi
 
-# 3) baixa/atualiza o repositório
+# 3) downloads/updates the repository
 c_say "Instalando Orchestra Agents em $INSTALL_DIR ..."
 if [ -n "${ORCHESTRA_LOCAL_SRC:-}" ]; then
-  # modo dev: instala a partir de uma cópia local.
-  # exclui .git (objetos read-only quebram a re-cópia e não são necessários em runtime)
-  # e caches; recria o destino do zero para evitar conflitos de sobrescrita.
+  # dev mode: installs from a local copy.
+  # excludes .git (read-only objects break the re-copy and are not needed at runtime)
+  # and caches; recreates the destination from scratch to avoid overwrite conflicts.
   rm -rf "$INSTALL_DIR"; mkdir -p "$INSTALL_DIR"
-  # '.orchestra' é ESTADO DE PROJETO (time, prompts, runtime) de quem está
-  # desenvolvendo — não pode viajar para dentro da instalação.
+  # '.orchestra' is PROJECT STATE (team, prompts, runtime) of whoever is
+  # developing — it must not travel into the installation.
   ( cd "$ORCHESTRA_LOCAL_SRC" && tar --exclude='./.git' --exclude='./.orchestra' \
       --exclude='*/__pycache__' --exclude='*.pyc' -cf - . ) \
     | ( cd "$INSTALL_DIR" && tar -xf - )
@@ -201,12 +201,12 @@ fi
 chmod +x "$INSTALL_DIR/bin/orchestra" "$INSTALL_DIR/agents/"*.sh 2>/dev/null || true
 c_ok "Arquivos instalados."
 
-# 4) symlink do CLI + registra o local (para o uninstall saber)
+# 4) CLI symlink + records the location (so the uninstall knows)
 ln -sf "$INSTALL_DIR/bin/orchestra" "$BIN_DIR/orchestra"
 mkdir -p "$STATE_DIR"; printf '%s' "$BIN_DIR" >"$STATE_DIR/bindir"
 c_ok "CLI instalado: $BIN_DIR/orchestra"
 
-# 5) PATH — só precisa configurar algo se o diretório escolhido NÃO estiver no PATH
+# 5) PATH — only needs to configure something if the chosen directory is NOT on the PATH
 READY_NOW=1
 if in_path "$BIN_DIR"; then
   c_ok "'orchestra' já disponível nesta sessão (sem configuração manual)."
@@ -233,9 +233,9 @@ else
   fi
 fi
 
-# 6) (o layout do zellij é GERADO por projeto a cada "orchestra up" — nada a copiar)
+# 6) (the zellij layout is GENERATED per project on every "orchestra up" — nothing to copy)
 
-# 7) agente reviewer no OpenCode — configuração AUTOMÁTICA (sem passo manual)
+# 7) reviewer agent in OpenCode — AUTOMATIC configuration (no manual step)
 OC_CFG="$(oc_config_path)"
 set +e
 python3 "$INSTALL_DIR/config/merge_reviewer.py" "$OC_CFG" "$INSTALL_DIR/config/opencode.reviewer.jsonc"

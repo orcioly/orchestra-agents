@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Orchestra Agents — gerador do layout do zellij para o time atual.
+# Orchestra Agents — zellij layout generator for the current team.
 #
-# O layout deixou de ser estático porque o time é dinâmico: N agentes, escolhidos
-# por projeto. Geramos o KDL em $ORCHESTRA_STATE/team.kdl a cada 'orchestra'.
+# The layout stopped being static because the team is dynamic: N agents, chosen
+# per project. We generate the KDL in $ORCHESTRA_STATE/team.kdl on every 'orchestra'.
 #
-# Não executar diretamente; é "sourced" pelo lib/core.sh.
+# Do not execute directly; it is sourced by lib/core.sh.
 
-_kdl_pane() { # $1 agente  $2 rótulo
+_kdl_pane() { # $1 agent  $2 label
   printf '                pane name="%s" command="bash" {\n' "$2"
   printf '                    args "-lc" "exec %s/agents/run-agent.sh %s"\n' "$ORCHESTRA_HOME" "$1"
   printf '                }\n'
 }
 
-# escreve o KDL do time e ecoa o caminho do arquivo
+# writes the team KDL and echoes the file path
 generate_layout() {
   team_ensure
   local out="$ORCHESTRA_STATE/team.kdl"
@@ -31,7 +31,7 @@ generate_layout() {
     printf '        }\n'
 
     if [ "${#workers[@]}" -eq 0 ]; then
-      :   # time só com o líder (modo solo)
+      :   # team with only the leader (solo mode)
     elif [ "${#workers[@]}" -le 3 ]; then
       printf '        pane split_direction="vertical" {\n'
       for n in "${workers[@]}"; do
@@ -39,7 +39,7 @@ generate_layout() {
       done
       printf '        }\n'
     else
-      # mais de 3 workers: duas fileiras, para nenhum painel ficar espremido
+      # more than 3 workers: two rows, so no pane gets squeezed
       half=$(( (${#workers[@]} + 1) / 2 ))
       printf '        pane split_direction="horizontal" {\n'
       printf '            pane split_direction="vertical" {\n'
